@@ -9,6 +9,12 @@ executed; it is parked in the confirmation queue for a human instead.
 Conditions come in two kinds (see scenes/model.py): *state* conditions
 compare a device property against a threshold, and *time_window* conditions
 hold only inside a local time-of-day window (which may cross midnight).
+A state condition may add ``for_seconds``: the engine tracks, from the
+state-change events it observes, how long each property has held its
+current value (monotonic clock), and the condition only holds once the
+value has satisfied the comparison continuously for that long. A value
+whose hold start was never observed counts as not holding - the engine
+would rather fire late than pretend a duration it did not witness.
 When a scene is skipped because a condition does not hold, the specific
 reason is written to the audit log - the execution report keeps the stable
 "conditions not met" marker. The clock is injectable (``clock=`` callable
@@ -122,6 +128,11 @@ class SceneEngine:
         self.confirmations = confirmations if confirmations is not None else ConfirmationQueue()
         self.scenes: dict[str, Scene] = {}
         self.clock = clock
+        # (device_id, property) -> (current value, monotonic time it took
+        # that value), fed by every state_change event the engine sees.
+        # Backs `for_seconds` state conditions; entries are only ever
+        # written from observed events, never seeded from device state.
+        self._value_since: dict[tuple[str, str], tuple[Any, float]] = {}
 
     def add_scene(self, scene: Scene) -> Scene:
         self.scenes[scene.name] = scene
@@ -173,6 +184,26 @@ class SceneEngine:
         return False
 
     # -- conditions ---------------------------------------------------------
+    def _track_state_change(self, event: Event) -> None:
+        """Record when each (device, property) took its current value.
+
+        Only state_change events carrying a value teach the engine
+        anything. A re-report of the same value keeps the original
+        timestamp (the hold continues); any different value restarts
+        that property's clock.
+        """
+        if event.type != "state_change" or "value" not in event.data:
+            return
+        device_id = event.get("device")
+        property_name = event.get("property")
+        if not device_id or not property_name:
+            return
+        value = event.get("value")
+        key = (device_id, property_name)
+        current = self._value_since.get(key)
+        if current is None or current[0] != value:
+            self._value_since[key] = (value, time.monotonic())
+
     def _now_minutes(self, event: Event | None = None) -> int:
         """Current time of day in minutes: injected clock > event > wall."""
         if self.clock is not None:
@@ -214,6 +245,38 @@ class SceneEngine:
                     f"{condition.property} is {actual!r} "
                     f"(expected {condition.op} {condition.value!r})"
                 )
+            if condition.for_seconds is not None:
+                failure = self._duration_failure(condition, actual)
+                if failure is not None:
+                    return failure
+        return None
+
+    def _duration_failure(self, condition: SceneCondition, actual: Any) -> str | None:
+        """None when the value has held long enough for ``for_seconds``.
+
+        The hold clock comes only from observed state_change events:
+        no observation (engine started after the value settled), or a
+        tracked value that no longer matches the device state (it moved
+        without an event), both count as "duration unknown" and fail -
+        late is acceptable, pretending is not.
+        """
+        required = condition.for_seconds
+        entry = self._value_since.get((condition.device, condition.property))
+        if entry is None or entry[0] != actual:
+            return (
+                f"state condition not met: {condition.device}."
+                f"{condition.property} must hold {condition.op} "
+                f"{condition.value!r} for {required:g}s, but how long it "
+                "has held its current value has not been observed"
+            )
+        held = time.monotonic() - entry[1]
+        if held < required:
+            return (
+                f"state condition not met: {condition.device}."
+                f"{condition.property} has held {condition.op} "
+                f"{condition.value!r} for {held:.0f}s "
+                f"(needs {required:g}s)"
+            )
         return None
 
     def _conditions_hold(self, conditions: list[SceneCondition]) -> bool:
@@ -221,6 +284,7 @@ class SceneEngine:
 
     # -- execution ----------------------------------------------------------
     def handle_event(self, event: Event) -> ExecutionReport:
+        self._track_state_change(event)
         report = ExecutionReport(event_type=event.type)
         for scene in self.scenes.values():
             if not scene.enabled:

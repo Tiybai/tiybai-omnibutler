@@ -13,7 +13,8 @@ operator's own configuration, never hard-coded and never logged:
 * Constructor: ``MiioDriver(devices=[{...}, ...])`` where each entry has
   ``id`` (canonical OmniButler device id), ``host`` (device IP), ``token``
   (32 hex characters), and optionally ``model``, ``name``, ``room``,
-  ``kind`` (``"air_conditioner"`` / ``"air_purifier"``) and ``mapping``
+  ``kind`` (``"air_conditioner"`` / ``"air_purifier"`` / ``"light"`` /
+  ``"fan"`` / ``"humidifier"``) and ``mapping``
   (per-property MIoT address overrides).
 * Environment: ``MIIO_DEVICES`` holds the same list as a JSON array; or a
   single device via ``MIIO_HOST`` / ``MIIO_TOKEN`` / ``MIIO_MODEL``.
@@ -29,6 +30,13 @@ families and every entry can be overridden per device through ``mapping``.
 Physical-device verification is still outstanding - see the provenance
 record. The air purifier's filter life has no canonical Capability in core
 yet, so it is reported as a raw ``filter_life`` state reading (percent).
+The light, fan and humidifier tables follow the MIoT specification's
+standard service definitions for those device types - generic layouts
+from published protocol facts, not one model's capture - so a specific
+model that deviates is handled by the same per-device ``mapping``
+overrides. The humidifier's ``humidity_reading`` is a raw reading in
+the filter-life mould, from the Environment service many humidifiers
+expose right after the main service.
 """
 
 from __future__ import annotations
@@ -319,6 +327,14 @@ _AC_MODES = ("auto", "cool", "dry", "heat", "fan")
 _AC_FAN_LEVELS = ("auto", "low", "medium", "high", "turbo")
 _AC_FAN_PERCENT = {"auto": 0, "low": 25, "medium": 50, "high": 75, "turbo": 100}
 _PURIFIER_MODES = ("auto", "silent", "turbo", "manual")
+# Generic fan / humidifier speed steps, following the _AC_FAN_LEVELS
+# pattern: the wire value indexes this tuple, and _FAN_LEVEL_PERCENT
+# gives each step its canonical percentage (steps 1-4 <-> 25/50/75/100).
+_FAN_LEVELS = ("1", "2", "3", "4")
+_FAN_LEVEL_PERCENT = {"1": 25, "2": 50, "3": 75, "4": 100}
+# One percent lookup for every fan_level table: labels are unique
+# across the tables, so _to_canonical / _to_wire can share it.
+_LEVEL_PERCENT = {**_AC_FAN_PERCENT, **_FAN_LEVEL_PERCENT}
 
 _FAMILY_MAPS: dict[str, dict[str, _MiotRef]] = {
     "air_conditioner": {
@@ -335,6 +351,29 @@ _FAMILY_MAPS: dict[str, dict[str, _MiotRef]] = {
         # state reading by get_state(), not a settable Property.
         "filter_life": _MiotRef(4, 1, "number", writable=False),
     },
+    # The three families below are the MIoT specification's standard
+    # service definitions for their device types (Light / Fan /
+    # Humidifier, each the device's main service at siid 2) - published
+    # protocol facts, not a specific model's capture. A model whose
+    # layout deviates is corrected per device through ``mapping``.
+    "light": {
+        "onoff": _MiotRef(2, 1, "bool"),
+        "brightness": _MiotRef(2, 2, "number"),
+        "color_temp": _MiotRef(2, 3, "number"),
+    },
+    "fan": {
+        "onoff": _MiotRef(2, 1, "bool"),
+        "fan_speed": _MiotRef(2, 2, "fan_level", _FAN_LEVELS),
+    },
+    "humidifier": {
+        "onoff": _MiotRef(2, 1, "bool"),
+        "fan_speed": _MiotRef(2, 2, "fan_level", _FAN_LEVELS),
+        # Common layout: an Environment service (siid 3) reporting
+        # relative humidity at piid 1, as many humidifiers expose it.
+        # Like filter_life above it has no settable Property here: it
+        # surfaces as a raw state reading only.
+        "humidity_reading": _MiotRef(3, 1, "number", writable=False),
+    },
 }
 
 # Canonical Property objects surfaced for each mapped family member.
@@ -350,15 +389,38 @@ _FAMILY_PROPERTIES: dict[str, dict[str, Property]] = {
         "mode": Property(Cap.MODE, options=["auto", "silent", "turbo", "manual"]),
         "pm25": Property(Cap.PM25),
     },
+    "light": {
+        "onoff": Property(Cap.ONOFF),
+        "brightness": Property(Cap.BRIGHTNESS),
+        "color_temp": Property(Cap.COLOR_TEMP),
+    },
+    "fan": {
+        "onoff": Property(Cap.ONOFF),
+        "fan_speed": Property(Cap.FAN_SPEED),
+    },
+    "humidifier": {
+        "onoff": Property(Cap.ONOFF),
+        "fan_speed": Property(Cap.FAN_SPEED),
+    },
 }
 
 
 def _kind_from_model(model: str) -> str:
     text = model.lower()
+    # The original two families are matched first so no model that used
+    # to classify keeps the same family it always had.
     if "aircondition" in text or "air-condition" in text:
         return "air_conditioner"
     if "airpurifier" in text or "air-purifier" in text or "purifier" in text:
         return "air_purifier"
+    # "dehumidifier" contains "humidifier" and lands here too - the
+    # generic humidifier layout is the closest table either way.
+    if "humidifier" in text:
+        return "humidifier"
+    if "fan" in text:
+        return "fan"
+    if any(word in text for word in ("light", "yeelight", "bulb", "lamp", "strip")):
+        return "light"
     return ""
 
 
@@ -499,7 +561,7 @@ class MiioDriver(Driver):
             raise DriverNotConfiguredError(
                 f"miIO device {config.id!r}: model {config.model!r} is not a "
                 "family this driver has a mapping table for (supported: "
-                "air_conditioner, air_purifier). Set 'kind' explicitly or "
+                f"{', '.join(sorted(_FAMILY_MAPS))}). Set 'kind' explicitly or "
                 "provide a full 'mapping' in the device configuration."
             )
         mapping = dict(_FAMILY_MAPS[family])
@@ -544,7 +606,7 @@ class MiioDriver(Driver):
                 label = ref.values[int(wire)]
             except (ValueError, TypeError, IndexError):
                 return wire
-            return _AC_FAN_PERCENT.get(label, wire)
+            return _LEVEL_PERCENT.get(label, wire)
         return wire
 
     @staticmethod
@@ -568,7 +630,7 @@ class MiioDriver(Driver):
             # Nearest labelled level; 0 selects the automatic level.
             best = min(
                 ref.values,
-                key=lambda label: abs(_AC_FAN_PERCENT.get(label, 0) - percent),
+                key=lambda label: abs(_LEVEL_PERCENT.get(label, 0) - percent),
             )
             return ref.values.index(best)
         return value

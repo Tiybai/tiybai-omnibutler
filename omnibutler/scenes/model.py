@@ -43,6 +43,11 @@ class SceneCondition:
 
     ``type == "state"`` (the default, and the only kind before v0.3):
     compare ``device``'s ``property`` against ``value`` with ``op``.
+    A state condition may also carry ``for_seconds``: the compared value
+    must then have *continuously* satisfied the comparison for at least
+    that many seconds (as observed by the engine from state-change
+    events) before the condition counts as holding - a debounce against
+    sensors that only spike briefly.
 
     ``type == "time_window"``: holds while the local time of day is inside
     the ``start``-``end`` window ("HH:MM", start inclusive, end exclusive).
@@ -55,6 +60,7 @@ class SceneCondition:
     op: str = "=="
     value: Any = None
     type: str = "state"
+    for_seconds: float | None = None  # state only: minimum hold duration
     start: str | None = None  # time_window only, "HH:MM"
     end: str | None = None    # time_window only, "HH:MM"
 

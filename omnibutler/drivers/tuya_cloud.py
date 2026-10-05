@@ -375,13 +375,25 @@ _OUTLET_CODES = {
     "cur_power": "power",
     "add_ele": "energy",
 }
-_KIND_CODES = {"bulb": _BULB_CODES, "outlet": _OUTLET_CODES}
+# Curtain codes mirror the local DP facts: control is DP 1,
+# percent_control DP 2, percent_state DP 3. percent_state is listed
+# after percent_control so a reported position wins over the last
+# commanded one when state is assembled.
+_CURTAIN_CODES = {
+    "control": "open_close",
+    "percent_control": "position",
+    "percent_state": "position",
+}
+_KIND_CODES = {"bulb": _BULB_CODES, "outlet": _OUTLET_CODES,
+               "curtain": _CURTAIN_CODES}
 _CANONICAL_TO_CODE = {
     "bulb": {"onoff": "switch_led", "brightness": "bright_value",
              "color_temp": "temp_value", "color": "colour_data"},
     "outlet": {"onoff": "switch"},
+    "curtain": {"open_close": "control", "position": "percent_control"},
 }
-_CATEGORY_KINDS = {"dj": "bulb", "cz": "outlet", "pc": "outlet"}
+_CATEGORY_KINDS = {"dj": "bulb", "cz": "outlet", "pc": "outlet",
+                   "cl": "curtain"}
 
 _BRIGHTNESS_RAW_MIN, _BRIGHTNESS_RAW_MAX = 10, 1000
 
@@ -559,6 +571,9 @@ class TuyaCloudDriver(Driver):
         if any(code in status for code in
                ("bright_value", "temp_value", "colour_data", "switch_led")):
             return "bulb"
+        if any(code in status for code in
+               ("percent_control", "percent_state")):
+            return "curtain"
         category = str(entry.get("category", "")).lower()
         return _CATEGORY_KINDS.get(category, "outlet")
 
@@ -586,6 +601,23 @@ class TuyaCloudDriver(Driver):
                 state["power"] = float(value) / 10  # 0.1 W units
             elif canonical == "energy":
                 state["energy"] = float(value) / 100  # 0.01 kWh units
+            elif canonical == "open_close":
+                text = str(value).lower()
+                if text == "open":
+                    state["open_close"] = True
+                elif text == "close":
+                    state["open_close"] = False
+                elif text == "stop":
+                    # Mirror the local driver: "stop" only says the
+                    # motor halted; infer from the reported position
+                    # rather than inventing a direction.
+                    reported = status.get(
+                        "percent_state", status.get("percent_control"))
+                    if reported is not None:
+                        state["open_close"] = float(reported) > 0
+            elif canonical == "position":
+                state["position"] = max(
+                    0, min(100, int(round(float(value)))))
         return {k: v for k, v in state.items() if k in device.properties}
 
     def _build_device(self, entry: Mapping[str, Any],
@@ -682,6 +714,10 @@ class TuyaCloudDriver(Driver):
             raw = _color_temp_to_raw(float(canonical), low, high)
         elif property_name == "color":
             raw = _color_to_cloud(str(canonical))
+        elif property_name == "open_close":
+            raw = "open" if canonical else "close"
+        elif property_name == "position":
+            raw = max(0, min(100, int(round(float(canonical)))))
         else:  # pragma: no cover - guarded by the code table above
             raw = canonical
         cloud_id = self._cloud_ids[device_id]
@@ -695,6 +731,18 @@ class TuyaCloudDriver(Driver):
 
     def call_action(self, device_id: str, action: str,
                     params: dict[str, Any]) -> dict[str, Any]:
+        if action in {"turn_on", "turn_off", "toggle"}:
+            if device_id not in self._devices:
+                self.discover()
+            if self._kinds.get(device_id) == "curtain":
+                # Curtains have no on/off; the actions mean open/close.
+                if action == "toggle":
+                    current = self.get_state(device_id).get(
+                        "open_close", False)
+                    return self.set_property(
+                        device_id, "open_close", not current)
+                return self.set_property(
+                    device_id, "open_close", action == "turn_on")
         if action in {"turn_on", "turn_off"}:
             return self.set_property(device_id, "onoff", action == "turn_on")
         if action == "toggle":

@@ -111,6 +111,12 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
             _fail(name, f"conditions[{idx}].type must be one of "
                         f"{sorted(CONDITION_TYPES)}, got {cond_type!r}")
         if cond_type == "time_window":
+            if cond_raw.get("for_seconds") is not None or (
+                isinstance(window_raw, dict)
+                and window_raw.get("for_seconds") is not None
+            ):
+                _fail(name, f"conditions[{idx}].for_seconds is only allowed "
+                            "on state conditions")
             # Two spellings: flat {type: time_window, start, end} or nested
             # {time_window: {start, end}}.
             if window_raw is not None and not isinstance(window_raw, dict):
@@ -136,9 +142,18 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
             _fail(name, f"conditions[{idx}].op must be one of {sorted(COMPARISON_OPS)}, got {cond_raw.get('op')!r}")
         if op not in {"truthy", "falsy"} and "value" not in cond_raw:
             _fail(name, f"conditions[{idx}] with op {op!r} requires a 'value'")
+        for_seconds = cond_raw.get("for_seconds")
+        if for_seconds is not None:
+            if (isinstance(for_seconds, bool)
+                    or not isinstance(for_seconds, (int, float))
+                    or for_seconds <= 0):
+                _fail(name, f"conditions[{idx}].for_seconds must be a "
+                            f"positive number of seconds, got {for_seconds!r}")
+            for_seconds = float(for_seconds)
         conditions.append(SceneCondition(
             device=cond_raw["device"], property=cond_raw["property"],
             op=op, value=cond_raw.get("value"),
+            for_seconds=for_seconds,
         ))
 
     actions_raw = raw.get("actions")

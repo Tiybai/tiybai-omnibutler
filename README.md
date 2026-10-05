@@ -147,7 +147,19 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.6 (this release) - the second completeness pass: a Xiaomi cloud
+v0.7 (this release) - depth where it counts: the Xiaomi driver now
+covers lights, fans and humidifiers (standard MIOT services) next to
+air conditioners and purifiers - and the Xiaomi cloud fallback picks
+the new families up automatically; the Tuya driver controls curtain
+motors (open/close + position), matching its device-data profile;
+scene state conditions accept `for_seconds`, so a rule can require
+"PM2.5 above 75 for 10 minutes" instead of reacting to a blip; and
+the audit log and data streams rotate by size (default 10 MiB x 5,
+tunable via OMNIBUTLER_LOG_MAX_MB / OMNIBUTLER_LOG_KEEP), so a
+long-running butler cannot fill the disk. `tob doctor` reports the
+state directory's total size.
+
+v0.6 - the second completeness pass: a Xiaomi cloud
 fallback driver (`--driver xiaomi_cloud`) joins the Tuya one - when
 a Xiaomi device cannot be reached locally (no token, not on this
 network), it can be controlled through the vendor cloud using the
@@ -185,7 +197,10 @@ biggest gap** (issues #2 and #4).
 - [x] v0.6 - Xiaomi cloud fallback driver (cloud fallbacks now cover
       both brands with a usable public cloud API); device-data at
       14 profiles
-- [ ] v0.7 - real-hardware verification round (needs owners of real
+- [x] v0.7 - retention caps for logs and streams; Xiaomi lights /
+      fans / humidifiers; Tuya curtain motors; sustained scene
+      conditions (`for_seconds`)
+- [ ] v0.8 - real-hardware verification round (needs owners of real
       devices - see issues #2 and #4)
 - [ ] Later - PyPI release (needs the maintainer's PyPI account)
 

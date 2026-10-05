@@ -16,7 +16,7 @@ Configuration (constructor argument or environment):
         "ip": "192.168.1.50",          # LAN address (required)
         "local_key": "...",            # per-device key (required, secret)
         "version": 3.3,                # protocol version (default 3.3)
-        "kind": "bulb",                # "outlet" (default) or "bulb"
+        "kind": "bulb",                # "outlet" (default), "bulb" or "curtain"
         "id": "living_plug",           # OmniButler id (default tuya-<dev id>)
         "name": "Living room plug",    # display name (optional)
         "room": "living",              # room (optional)
@@ -31,7 +31,9 @@ Data-point (DP) facts used below are the standard Tuya category definitions
 (vendor-published): outlets use DP 1 (switch), DP 17 (accumulated energy,
 0.01 kWh units) and DP 19 (current power, 0.1 W units); bulbs use DP 20
 (switch), DP 22 (brightness, raw 10-1000), DP 23 (colour temperature, raw
-0-1000 across the bulb's kelvin range) and DP 24 (colour, HSV hex string).
+0-1000 across the bulb's kelvin range) and DP 24 (colour, HSV hex string); curtains use DP 1 (control:
+open/close/stop), DP 2 (percent control, 0-100) and DP 3 (percent
+state, 0-100).
 Per-model mappings for the device catalogue live in device-data/.
 """
 
@@ -75,11 +77,16 @@ KIND_PROPERTIES: dict[str, dict[str, Property]] = {
         "color_temp": Property(Cap.COLOR_TEMP, minimum=2700, maximum=6500),
         "color": Property(Cap.COLOR),
     },
+    "curtain": {
+        "open_close": Property(Cap.OPEN_CLOSE),
+        "position": Property(Cap.POSITION, minimum=0, maximum=100),
+    },
 }
 
 # DP ids (string keys, as tinytuya status() returns them).
 _OUTLET_DP = {"switch": "1", "energy": "17", "power": "19"}
 _BULB_DP = {"switch": "20", "brightness": "22", "color_temp": "23", "color": "24"}
+_CURTAIN_DP = {"control": "1", "percent_control": "2", "percent_state": "3"}
 _BRIGHTNESS_RAW_MIN, _BRIGHTNESS_RAW_MAX = 10, 1000
 
 
@@ -174,11 +181,15 @@ class TuyaDriver(Driver):
         if device_id not in self._connections:
             tinytuya = _load_tinytuya()
             config = self._configs[device_id]
-            cls = (
-                tinytuya.BulbDevice
-                if config["kind"] == "bulb"
-                else tinytuya.OutletDevice
-            )
+            if config["kind"] == "bulb":
+                cls = tinytuya.BulbDevice
+            elif config["kind"] == "curtain":
+                # tinytuya ships a CoverDevice for blinds/curtains; if a
+                # release lacks it, the outlet class speaks the same
+                # status()/set_value() surface this driver uses.
+                cls = getattr(tinytuya, "CoverDevice", tinytuya.OutletDevice)
+            else:
+                cls = tinytuya.OutletDevice
             self._connections[device_id] = cls(
                 config["device_id"],
                 config["ip"],
@@ -244,14 +255,15 @@ class TuyaDriver(Driver):
 
     def _state_from_dps(self, device: Device, dps: dict[str, Any]) -> dict[str, Any]:
         state: dict[str, Any] = {}
-        if self._configs[device.id]["kind"] == "outlet":
+        kind = self._configs[device.id]["kind"]
+        if kind == "outlet":
             if _OUTLET_DP["switch"] in dps:
                 state["onoff"] = bool(dps[_OUTLET_DP["switch"]])
             if _OUTLET_DP["power"] in dps:
                 state["power"] = float(dps[_OUTLET_DP["power"]]) / 10  # 0.1 W units
             if _OUTLET_DP["energy"] in dps:
                 state["energy"] = float(dps[_OUTLET_DP["energy"]]) / 100  # 0.01 kWh
-        else:
+        elif kind == "bulb":
             if _BULB_DP["switch"] in dps:
                 state["onoff"] = bool(dps[_BULB_DP["switch"]])
             if _BULB_DP["brightness"] in dps:
@@ -267,6 +279,27 @@ class TuyaDriver(Driver):
                 )
             if _BULB_DP["color"] in dps:
                 state["color"] = self._color_from_raw(dps[_BULB_DP["color"]])
+        else:  # curtain
+            position: float | None = None
+            if _CURTAIN_DP["percent_state"] in dps:
+                position = float(dps[_CURTAIN_DP["percent_state"]])
+            elif _CURTAIN_DP["percent_control"] in dps:
+                position = float(dps[_CURTAIN_DP["percent_control"]])
+            if position is not None:
+                state["position"] = max(0, min(100, round(position)))
+            if _CURTAIN_DP["control"] in dps:
+                control = str(dps[_CURTAIN_DP["control"]]).lower()
+                if control == "open":
+                    state["open_close"] = True
+                elif control == "close":
+                    state["open_close"] = False
+                elif control == "stop" and position is not None:
+                    # "stop" only says the motor halted mid-travel; the
+                    # honest open/closed reading is the reported
+                    # position - anything above fully closed is open.
+                    state["open_close"] = position > 0
+            # Missing DPs stay missing: never invent a position or a
+            # direction the device did not report.
         return {key: value for key, value in state.items() if key in device.properties}
 
     # -- Driver API --------------------------------------------------------
@@ -323,6 +356,17 @@ class TuyaDriver(Driver):
                 setter(red, green, blue)
             else:
                 connection.set_value(int(_BULB_DP["color"]), raw)
+        elif kind == "curtain" and property_name == "open_close":
+            connection.set_value(
+                int(_CURTAIN_DP["control"]), "open" if canonical else "close"
+            )
+        elif kind == "curtain" and property_name == "position":
+            # The wire value is an integer percent. Property validation
+            # already enforces 0-100; round and clamp defensively anyway.
+            raw_position = max(0, min(100, int(round(float(canonical)))))
+            connection.set_value(
+                int(_CURTAIN_DP["percent_control"]), raw_position
+            )
         else:
             raise OmniButlerError(
                 f"Tuya driver cannot set {property_name!r} on a {kind} device."
@@ -335,6 +379,15 @@ class TuyaDriver(Driver):
     ) -> dict[str, Any]:
         _load_tinytuya()  # the transport dependency gates every operation
         self._lookup(device_id)
+        if self._configs[device_id]["kind"] == "curtain":
+            # Curtains have no on/off; the advertised actions mean
+            # open/close for them.
+            if action in {"turn_on", "turn_off"}:
+                return self.set_property(
+                    device_id, "open_close", action == "turn_on")
+            if action == "toggle":
+                current = self.get_state(device_id).get("open_close", False)
+                return self.set_property(device_id, "open_close", not current)
         if action in {"turn_on", "turn_off"}:
             return self.set_property(device_id, "onoff", action == "turn_on")
         if action == "toggle":

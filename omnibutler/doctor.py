@@ -555,6 +555,28 @@ def _check_cloud_fallbacks(config: Mapping[str, Any],
     )
 
 
+def _human_size(num_bytes: int) -> str:
+    """A byte count the way a human reads it: 812 B, 3.2 MB, 1.4 GB."""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"  # pragma: no cover - loop always returns
+
+
+def _dir_total_size(directory: Path) -> int:
+    """Total size of every file under ``directory`` (best effort)."""
+    total = 0
+    for root, _dirs, files in os.walk(directory):
+        for name in files:
+            try:
+                total += (Path(root) / name).stat().st_size
+            except OSError:
+                continue  # a file vanishing mid-walk is not a failure
+    return total
+
+
 def _check_state_dir(runtime: Any | None) -> CheckResult:
     name = "state-dir"
     audit_path: Path | None = None
@@ -576,10 +598,13 @@ def _check_state_dir(runtime: Any | None) -> CheckResult:
             f"({exc.strerror or exc}) - the audit log and queued "
             "confirmations cannot be stored there",
         )
+    size = _human_size(_dir_total_size(directory))
     return CheckResult(
         name, OK,
         f"{directory} is writable (audit log lives here; high-risk "
-        "actions wait in the confirmation queue before anything runs)",
+        f"actions wait in the confirmation queue before anything runs). "
+        f"The directory currently holds {size} in total - the audit log "
+        "and data streams rotate by size, so this stays bounded",
     )
 
 

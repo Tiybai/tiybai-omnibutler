@@ -24,6 +24,12 @@ This module models those as data streams:
   append a single line, the same low-tech approach as the audit log; the
   store is meant for phone/watch-rate data, not sensor firehoses.
 
+  Like the audit log, the file rotates by size (see
+  :mod:`omnibutler.core.audit` for the shared policy and the
+  ``OMNIBUTLER_LOG_MAX_MB`` / ``OMNIBUTLER_LOG_KEEP`` overrides), and the
+  store replays the rotated backups oldest-first on load, so rotation
+  never hides history from :meth:`StreamStore.history` readers.
+
 Streams are deliberately read-only from the bridge's point of view:
 producers append, scenes/agents query. There is no set/delete API.
 """
@@ -37,6 +43,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from omnibutler.core.audit import (
+    retention_from_env,
+    rotate_if_needed,
+    rotated_paths,
+)
 from omnibutler.core.confirmations import default_state_dir
 
 STREAMS_FILENAME = "streams.jsonl"
@@ -111,6 +122,8 @@ class StreamStore:
         self,
         state_dir: str | Path | None = None,
         path: str | Path | None = None,
+        max_bytes: int | None = None,
+        keep: int | None = None,
     ) -> None:
         if path is not None:
             self.path = Path(path)
@@ -118,6 +131,9 @@ class StreamStore:
             self.path = Path(state_dir) / STREAMS_FILENAME
         else:
             self.path = default_state_dir() / STREAMS_FILENAME
+        # Size-based rotation of streams.jsonl, same policy as the audit
+        # log; explicit args win, then the OMNIBUTLER_LOG_* env vars.
+        self.max_bytes, self.keep = retention_from_env(max_bytes, keep)
         self._lock = threading.RLock()
         self._streams: dict[str, DataStream] = {}
         self._points: dict[str, list[DataPoint]] = {}
@@ -125,11 +141,18 @@ class StreamStore:
 
     # -- persistence ------------------------------------------------------
     def _load(self) -> None:
-        """Rebuild descriptors and points by replaying the JSONL file."""
-        try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return
+        """Rebuild descriptors and points by replaying the JSONL files.
+
+        Rotated backups are replayed oldest first, the live file last,
+        so history survives rotation intact and the newest descriptor
+        for a stream wins.
+        """
+        lines: list[str] = []
+        for path in rotated_paths(self.path, self.keep):
+            try:
+                lines.extend(path.read_text(encoding="utf-8").splitlines())
+            except OSError:
+                continue
         for line in lines:
             line = line.strip()
             if not line:
@@ -157,6 +180,10 @@ class StreamStore:
         # written or kept in memory.
         line = json.dumps(record, ensure_ascii=False)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        rotate_if_needed(
+            self.path, len(line.encode("utf-8")) + 1,
+            self.max_bytes, self.keep,
+        )
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
