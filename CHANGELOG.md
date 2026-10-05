@@ -8,6 +8,16 @@ For the full release notes, see
 Every driver below is tested against fake devices unless noted otherwise -
 real-hardware verification is still the project's open gap.
 
+## [0.10.3] - 2026-10-06
+
+### Fixed
+- Windows CI (the last red leg): the license-gate candidate tests
+  proved the pip-licenses script selection by executing a fake
+  `#!/bin/sh` script - not a runnable thing on Windows (WinError
+  193/216). Selection is now a pure function
+  (`check_licenses._pip_licenses_command`) asserted directly on
+  every OS; the shell-script end-to-end test stays on POSIX.
+
 ## [0.10.2] - 2026-10-05
 
 ### Fixed

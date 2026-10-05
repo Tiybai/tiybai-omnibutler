@@ -153,6 +153,43 @@ def _license_script(body: str) -> str:
     return f"#!/bin/sh\nprintf '%s' '{body}'\n"
 
 
+def _license_module():
+    sys.path.insert(0, str(REPO_ROOT / "scripts"))
+    try:
+        import check_licenses
+
+        return check_licenses
+    finally:
+        sys.path.remove(str(REPO_ROOT / "scripts"))
+
+
+def _selection(tmp_path: Path, sub: str, names: list[str]) -> list[str]:
+    bindir = tmp_path / sub
+    bindir.mkdir()
+    for name in names:
+        (bindir / name).write_text("", encoding="utf-8")
+    return _license_module()._pip_licenses_command(str(bindir))
+
+
+def test_license_gate_command_finds_exe_candidate(tmp_path):
+    # Only the Windows-named script exists: it must be the pick (the
+    # -m fallback against a real install is not the same thing).
+    cmd = _selection(tmp_path, "bin", ["pip-licenses.exe"])
+    assert cmd == [str(tmp_path / "bin" / "pip-licenses.exe")]
+
+
+def test_license_gate_command_finds_plain_candidate(tmp_path):
+    cmd = _selection(tmp_path, "bin", ["pip-licenses"])
+    assert cmd == [str(tmp_path / "bin" / "pip-licenses")]
+
+
+def test_license_gate_command_prefers_plain_and_falls_back(tmp_path):
+    cmd = _selection(tmp_path, "both", ["pip-licenses", "pip-licenses.exe"])
+    assert cmd == [str(tmp_path / "both" / "pip-licenses")]
+    cmd = _selection(tmp_path, "none", [])
+    assert cmd == [sys.executable, "-m", "piplicenses"]
+
+
 def _run_license_main(monkeypatch, tmp_path: Path, names: list[str]):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -162,27 +199,16 @@ def _run_license_main(monkeypatch, tmp_path: Path, names: list[str]):
         script.write_text(_license_script("[]"), encoding="utf-8")
         script.chmod(script.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setattr(sys, "executable", str(bindir / "python"))
-    sys.path.insert(0, str(REPO_ROOT / "scripts"))
-    try:
-        import check_licenses
-
-        return check_licenses.main()
-    finally:
-        sys.path.remove(str(REPO_ROOT / "scripts"))
+    return _license_module().main()
 
 
-def test_license_gate_finds_exe_candidate(monkeypatch, tmp_path, capsys):
-    # Only the Windows-named script exists: the gate must pick it up
-    # (the -m fallback would fail against the fake interpreter path).
-    rc = _run_license_main(monkeypatch, tmp_path, ["pip-licenses.exe"])
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="the end-to-end fake is a POSIX shell script")
+def test_license_gate_main_runs_found_script(monkeypatch, tmp_path, capsys):
+    rc = _run_license_main(monkeypatch, tmp_path, ["pip-licenses"])
     assert rc == 0
     assert "License gate passed for 0 installed packages." in \
         capsys.readouterr().out
-
-
-def test_license_gate_still_finds_plain_candidate(monkeypatch, tmp_path):
-    rc = _run_license_main(monkeypatch, tmp_path, ["pip-licenses"])
-    assert rc == 0
 
 
 # -- CI matrix shape --------------------------------------------------------

@@ -153,7 +153,7 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.10.2 (this release) - the audit round: four independent audits
+v0.10.3 (this release) - the audit round: four independent audits
 (cross-platform, security and concurrency, data layer and
 performance, docs and UI alignment) went over the whole codebase,
 and every finding was fixed or consciously accepted. The
@@ -181,9 +181,13 @@ PyPI, so the Broadlink extra skips itself on older Pythons instead
 of failing the whole install. The .2 patch skips the POSIX-probe
 test on Windows hosts: forcing the kill(0) path there can broadcast
 a console Ctrl+C and interrupt the test runner itself - the very
-hazard the Win32 probe branch exists to avoid. Real-hardware
-verification moves to v0.11 - it still needs owners of real
-devices (issues #2 and #4).
+hazard the Win32 probe branch exists to avoid. The .3 patch makes
+the license-gate tests platform-true: they asserted candidate
+selection by executing a POSIX shell script, which Windows cannot
+run - selection is now a pure function, asserted directly on every
+OS, with the shell-script end-to-end kept on POSIX runners.
+Real-hardware verification moves to v0.11 - it still needs owners
+of real devices (issues #2 and #4).
 
 v0.9 - the final sweep: scenes gain delayed actions
 (`- delay: 300` - a light that turns itself off, a vacuum that starts

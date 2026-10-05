@@ -19,6 +19,7 @@ package with the extras you want to gate (CI installs all of them).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
@@ -32,19 +33,21 @@ ALLOWED_MARKERS = (
 BLOCKED_MARKERS = ("gpl", "agpl", "lgpl", "copyleft", "commons clause")
 
 
-def main() -> int:
-    import os
+def _pip_licenses_command(bindir: str) -> list[str]:
+    """The command that runs pip-licenses for the given interpreter dir.
 
-    # The console script sits next to the interpreter; on Windows it
-    # carries an .exe suffix, so try both names before the -m fallback.
-    bindir = os.path.dirname(sys.executable)
-    script = next(
-        (candidate for name in ("pip-licenses", "pip-licenses.exe")
-         if os.path.exists(candidate := os.path.join(bindir, name))),
-        None,
-    )
-    cmd = ([script] if script is not None
-           else [sys.executable, "-m", "piplicenses"])
+    The console script sits next to the interpreter; on Windows it
+    carries an .exe suffix, so try both names before the -m fallback.
+    """
+    for name in ("pip-licenses", "pip-licenses.exe"):
+        candidate = os.path.join(bindir, name)
+        if os.path.exists(candidate):
+            return [candidate]
+    return [sys.executable, "-m", "piplicenses"]
+
+
+def main() -> int:
+    cmd = _pip_licenses_command(os.path.dirname(sys.executable))
     try:
         out = subprocess.run(
             [*cmd, "--format=json", "--with-system"],
