@@ -94,6 +94,12 @@ tob mcp        # 在 stdio 上提供 MCP 服务
 （默认 `127.0.0.1:8765`），必须带 `$OMNIBUTLER_HTTP_TOKEN` 的令牌；
 远程访问请套 Cloudflare Access 或 WireGuard，不要裸奔。
 
+**不用终端也能批准：** `tob approvals` 起一个本地小网页（独立口令
+`$OMNIBUTLER_APPROVALS_TOKEN`，默认只在本机打开），排队的动作列在
+页面上，点「批准执行」或「拒绝」就行；或者在 Mac 上 `tob run --notify`，
+有新待确认时弹原生对话框。两种都是人在 MCP 之外的点击，AI 仍然批
+不了任何东西。Mac 弹窗的默认按钮是「拒绝」，不回答永远不等于同意。
+
 常驻运行用 `tob run`（定时触发 + 设备状态轮询）；接真设备前先跑
 `tob doctor` 体检，取钥匙的方法看 `tob setup miio` / `tob setup tuya`。
 

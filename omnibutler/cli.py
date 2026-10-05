@@ -15,6 +15,7 @@ Examples:
     tob doctor                  health-check drivers, credentials and scenes
     tob setup miio              plain-language guide to getting a device key
     tob pending                 list high-risk actions waiting for a human (host only)
+    tob approvals               serve the approvals web page (human clicks, host only)
     tob confirm cfm-0001        approve a queued high-risk action (host only)
     tob reject cfm-0001         reject a queued high-risk action (host only)
 """
@@ -237,8 +238,41 @@ def cmd_run(args) -> int:
 
     print(f"omnibutler running with driver={runtime.driver_name} "
           f"(poll every {args.poll}s; Ctrl-C to stop)")
-    stats = run_daemon(runtime, poll_interval=args.poll)
+    if args.approvals_port > 0:
+        print(f"approvals page: http://{args.host}:{args.approvals_port}/ "
+              f"(token from $OMNIBUTLER_APPROVALS_TOKEN)")
+    if args.notify:
+        import sys as _sys
+
+        if _sys.platform == "darwin":
+            print("macOS dialog popups enabled for new pending confirmations")
+        else:
+            print("note: --notify needs macOS; dialogs are unavailable on "
+                  f"{_sys.platform}, continuing without popups")
+    try:
+        stats = run_daemon(runtime, poll_interval=args.poll,
+                           approvals_port=args.approvals_port,
+                           approvals_host=args.host, notify=args.notify)
+    except RuntimeError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     print(f"stopped: {json.dumps(stats, ensure_ascii=False, default=str)}")
+    return 0
+
+
+def cmd_approvals(args) -> int:
+    runtime = build_runtime(driver=args.driver, audit_path=args.audit)
+    from omnibutler.approvals_web import ApprovalsWebError, serve
+
+    print(f"approvals page: http://{args.host}:{args.port}/ "
+          f"(open with ?token=<your $OMNIBUTLER_APPROVALS_TOKEN>; "
+          f"Ctrl-C to stop)")
+    try:
+        serve(runtime.engine, runtime.confirmations, runtime.manager,
+              host=args.host, port=args.port)
+    except ApprovalsWebError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -418,7 +452,21 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("run", help="run the butler daemon (schedule + state polling)")
     p.add_argument("--poll", type=int, default=30,
                    help="device state poll interval in seconds (default 30)")
+    p.add_argument("--approvals-port", type=int, default=0,
+                   help="also serve the approvals web page on this port "
+                        "(needs $OMNIBUTLER_APPROVALS_TOKEN)")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="bind host for the approvals page (default 127.0.0.1)")
+    p.add_argument("--notify", action="store_true",
+                   help="pop a macOS dialog for each new pending confirmation "
+                        "(macOS only; noted and skipped elsewhere)")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("approvals", help="serve the human approvals web page "
+                                         "(needs $OMNIBUTLER_APPROVALS_TOKEN)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8766)
+    p.set_defaults(func=cmd_approvals)
 
     p = sub.add_parser("doctor", help="health-check drivers, credentials and scenes")
     p.set_defaults(func=cmd_doctor)

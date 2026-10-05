@@ -44,6 +44,9 @@ class Daemon:
         tick_seconds: float = 1,
         sleep_fn: Callable[[float], None] = time.sleep,
         now_fn: Callable[[], datetime.datetime] = datetime.datetime.now,
+        approvals_port: int = 0,
+        approvals_host: str = "127.0.0.1",
+        notify: bool = False,
     ) -> None:
         self.runtime = runtime
         self.engine = runtime.engine
@@ -53,6 +56,16 @@ class Daemon:
         self.tick_seconds = tick_seconds
         self.sleep_fn = sleep_fn
         self.now_fn = now_fn
+        # Optional human-approval extras (started/stopped with the loop):
+        # the out-of-band approvals web page and/or the macOS dialog
+        # watcher. Both only *surface* the confirmation queue to a human;
+        # neither changes the safety model.
+        self.approvals_port = approvals_port
+        self.approvals_host = approvals_host
+        self.notify = notify
+        self._approvals_httpd = None
+        self._approvals_thread: threading.Thread | None = None
+        self._watcher_thread: threading.Thread | None = None
 
         self._stop = threading.Event()
         self._last_minute_key: str | None = None
@@ -87,6 +100,7 @@ class Daemon:
             result={"scenes": sorted(self.engine.scenes)}, ok=True,
         )
         try:
+            self._start_extras()
             while not self._stop.is_set():
                 if max_ticks is not None and self.stats["ticks"] >= max_ticks:
                     break
@@ -100,12 +114,69 @@ class Daemon:
                     break
                 self.sleep_fn(self.tick_seconds)
         finally:
+            self._stop_extras()
             self._restore_signal_handlers(previous_handlers)
             self.audit.record(
                 AGENT, "daemon", "daemon:stop", {},
                 result=dict(self.stats), ok=True,
             )
         return dict(self.stats)
+
+    # -- human-approval extras (approvals web page / macOS dialogs) ----------
+    def _start_extras(self) -> None:
+        confirmations = self.runtime.confirmations
+        if self.approvals_port > 0:
+            from omnibutler.approvals_web import create_http_server
+
+            self._approvals_httpd = create_http_server(
+                self.engine, confirmations, self.manager,
+                host=self.approvals_host, port=self.approvals_port,
+            )
+            self._approvals_thread = threading.Thread(
+                target=self._approvals_httpd.serve_forever,
+                name="omnibutler-approvals-web", daemon=True,
+            )
+            self._approvals_thread.start()
+            self.audit.record(
+                AGENT, "daemon", "daemon:approvals_web", {},
+                result={"host": self.approvals_host,
+                        "port": self._approvals_httpd.server_address[1]},
+                ok=True,
+            )
+        if self.notify:
+            from omnibutler import notify_macos
+
+            if not notify_macos.is_supported():
+                # Asked for, but impossible here: say so loudly in the
+                # audit log (the CLI prints the same notice) and keep
+                # running - the queue and the web page still work.
+                self.audit.record(
+                    AGENT, "daemon", "daemon:notify_unavailable",
+                    {"requested": True},
+                    result={"reason": "macOS dialogs need darwin"},
+                    ok=False,
+                )
+            else:
+                notify_fn = notify_macos.macos_dialog_notifier(
+                    self.engine, confirmations, self.manager)
+                watcher = notify_macos.PendingWatcher(
+                    confirmations, notify_fn)
+                self._watcher_thread = threading.Thread(
+                    target=watcher.run_forever, args=(self._stop,),
+                    name="omnibutler-notify-watcher", daemon=True,
+                )
+                self._watcher_thread.start()
+                self.audit.record(
+                    AGENT, "daemon", "daemon:notify_started", {}, ok=True,
+                )
+
+    def _stop_extras(self) -> None:
+        if self._approvals_httpd is not None:
+            self._approvals_httpd.shutdown()
+            self._approvals_httpd.server_close()
+            self._approvals_httpd = None
+        # The watcher thread exits on its own once _stop is set (or at
+        # process exit - it is a daemon thread).
 
     # -- schedule ticks ----------------------------------------------------
     def _maybe_fire_schedule(self, now: datetime.datetime) -> None:
@@ -229,11 +300,19 @@ def run_daemon(
     max_ticks: int | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     now_fn: Callable[[], datetime.datetime] = datetime.datetime.now,
+    approvals_port: int = 0,
+    approvals_host: str = "127.0.0.1",
+    notify: bool = False,
 ) -> dict[str, int]:
     """Run the bridge daemon until SIGINT/SIGTERM (or ``max_ticks`` ticks).
 
     Returns a stats dict: ticks run, schedule events fired, polls done,
     state changes forwarded to the engine, and errors survived.
+
+    ``approvals_port`` > 0 additionally serves the human approvals web
+    page (see approvals_web; needs $OMNIBUTLER_APPROVALS_TOKEN) in the
+    same process. ``notify`` enables macOS dialog popups for newly queued
+    confirmations; on other platforms it is reported and skipped.
     """
     daemon = Daemon(
         runtime,
@@ -241,5 +320,8 @@ def run_daemon(
         tick_seconds=tick_seconds,
         sleep_fn=sleep_fn,
         now_fn=now_fn,
+        approvals_port=approvals_port,
+        approvals_host=approvals_host,
+        notify=notify,
     )
     return daemon.run(max_ticks=max_ticks)

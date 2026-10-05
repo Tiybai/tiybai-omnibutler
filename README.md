@@ -107,6 +107,14 @@ tools over HTTP on `127.0.0.1:8765`, protected by a bearer token from
 `$OMNIBUTLER_HTTP_TOKEN`. For remote access put it behind Cloudflare
 Access or WireGuard; do not expose it raw.
 
+**Approving without a terminal:** `tob approvals` serves a small local
+web page (its own password, `$OMNIBUTLER_APPROVALS_TOKEN`, localhost by
+default) listing what is waiting, with Approve / Reject buttons - or
+run `tob run --notify` on a Mac and a native dialog pops up when
+something queues. Both are human clicks outside the MCP surface; the AI
+still cannot approve anything. On the Mac dialog, Reject is the default
+button and silence never means yes.
+
 Run it as an always-on butler with `tob run` (schedule triggers and
 device-state polling), check a real setup with `tob doctor`, and get
 plain-language help fetching a device key with `tob setup miio` /
