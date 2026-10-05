@@ -58,8 +58,9 @@ docker compose up -d --build
 
 What you get: the daemon (`tob run`) running full-time, the approvals
 web page on port 8766, and - if you enable the `mcp` profile - the MCP
-HTTP endpoint on port 8765. Port 8767 is reserved for a future
-phone-gateway service.
+HTTP endpoint on port 8765. The phone gateway listens on port 8767 -
+run it inside the daemon with `tob run --gateway`, or as the separate
+`gateway` service sketched in the compose file.
 
 One warning that matters: the LAN drivers (Xiaomi, Tuya, Broadlink)
 need to talk to devices on your home network. On Linux, enable

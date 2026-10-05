@@ -12,12 +12,17 @@
 #   tuya       Tuya LAN control (tinytuya)
 #   broadlink  Broadlink IR/RF hubs (python-broadlink)
 #   midea      Midea appliances (msmart-ng)
+#   matter     Matter controller client (websockets)
+#   zigbee     Zigbee2MQTT over MQTT (paho-mqtt)
 #   dev        test tooling - never needed in a runtime image
+# The two vendor-cloud fallback drivers (tuya_cloud, xiaomi_cloud) need
+# no extra: they are stdlib-only and selected explicitly at runtime.
 #
 # Run: the default command is `tob run` (the always-on daemon: schedule
 # triggers + device state polling). Which drivers it loads comes from the
 # TOB_DRIVER environment variable (mock | homeassistant | miio | tuya |
-# broadlink | midea | all, default: mock). Real devices are configured in
+# broadlink | midea | matter | zigbee2mqtt | tuya_cloud | xiaomi_cloud |
+# all, default: mock). Real devices are configured in
 # ~/.omnibutler/config.json inside the container - mount a host directory
 # over /home/omnibutler/.omnibutler so the config AND the runtime state
 # (confirmation queue, audit log) survive restarts. Secrets in the config
@@ -70,7 +75,9 @@ VOLUME ["/home/omnibutler/.omnibutler"]
 #       process (needs OMNIBUTLER_HTTP_TOKEN; see docker-compose.example.yml)
 # 8766: human approvals web page (`tob run --approvals-port 8766`,
 #       needs OMNIBUTLER_APPROVALS_TOKEN)
-EXPOSE 8765 8766
+# 8767: phone gateway (`tob run --gateway` or a separate `tob gateway`
+#       process, needs OMNIBUTLER_GATEWAY_TOKEN)
+EXPOSE 8765 8766 8767
 
 HEALTHCHECK --interval=60s --timeout=15s --start-period=30s --retries=3 \
     CMD tob doctor >/dev/null 2>&1 || exit 1

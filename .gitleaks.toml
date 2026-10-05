@@ -1,0 +1,21 @@
+# Gitleaks configuration for Tiybai OmniButler.
+# Extends the built-in ruleset; the only allowlist entries are known
+# test fixtures (sequential dummy tokens in fake device data), pinned
+# by path AND fingerprint so a real secret in the same files still
+# fails the scan.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test fixture tokens (fake device data in tests)"
+condition = "AND"
+paths = [
+  "tests/test_cloud_keys.py",
+  "tests/test_miio_driver.py",
+]
+fingerprints = [
+  "tests/test_cloud_keys.py:generic-api-key:92",
+  "tests/test_cloud_keys.py:generic-api-key:107",
+  "tests/test_miio_driver.py:generic-api-key:26",
+]

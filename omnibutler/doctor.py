@@ -511,6 +511,50 @@ def _check_gateway_token(environ: Mapping[str, str]) -> CheckResult:
     )
 
 
+def _check_cloud_fallbacks(config: Mapping[str, Any],
+                           environ: Mapping[str, str]) -> CheckResult:
+    """Vendor-cloud fallback drivers: are credentials present?
+
+    Presence only, like the gateway-token check - values are never
+    read out or shown. A cloud fallback is an explicit, optional
+    extra (neither cloud driver joins the `all` set), so "nothing
+    configured" is a WARN with an explanation, not a failure.
+    """
+    name = "cloud-fallbacks"
+    configured: list[str] = []
+
+    def section_has(section: str, *keys: str) -> bool:
+        data = config.get(section)
+        if not isinstance(data, Mapping):
+            return False
+        return all(str(data.get(key) or "").strip() for key in keys)
+
+    def env_has(*keys: str) -> bool:
+        return all(environ.get(key, "").strip() for key in keys)
+
+    if (env_has("TUYA_CLOUD_ACCESS_ID", "TUYA_CLOUD_ACCESS_SECRET")
+            or section_has("tuya_cloud", "access_id", "access_secret")):
+        configured.append("tuya_cloud")
+    if (env_has("XIAOMI_CLOUD_USERNAME", "XIAOMI_CLOUD_PASSWORD")
+            or section_has("xiaomi_cloud", "username", "password")):
+        configured.append("xiaomi_cloud")
+
+    if configured:
+        return CheckResult(
+            name, OK,
+            "vendor-cloud fallback credentials are set for: "
+            + ", ".join(configured)
+            + " (values are never shown). These drivers only run when "
+            "selected explicitly, e.g. --driver tuya_cloud",
+        )
+    return CheckResult(
+        name, WARN,
+        "no vendor-cloud fallback is configured - only needed for a "
+        "device with no local path. See `tob setup tuya_cloud` or "
+        "`tob setup xiaomi_cloud`; local control never needs them",
+    )
+
+
 def _check_state_dir(runtime: Any | None) -> CheckResult:
     name = "state-dir"
     audit_path: Path | None = None
@@ -635,6 +679,7 @@ def check_all(
     results.append(_check_matter(config, environ, timeout))
     results.append(_check_zigbee2mqtt(config, environ, timeout))
     results.append(_check_gateway_token(environ))
+    results.append(_check_cloud_fallbacks(config, environ))
     results.append(_check_state_dir(runtime))
     results.append(_check_scenes(scenes_dir))
     return results

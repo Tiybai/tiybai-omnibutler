@@ -84,10 +84,16 @@ services:
     ports:
       - "8765:8765"
 
-  # Reserved for the future phone-gateway service (wearables / health data
-  # relay). Not implemented yet - port 8767 is held for it so firewall and
-  # reverse-proxy rules can be written once, now.
+  # Phone gateway (device data streams + geofence events, port 8767).
+  # Either run it inside the daemon - add `--gateway` to the main
+  # service's command and publish the port there - or as its own
+  # process like this. Needs OMNIBUTLER_GATEWAY_TOKEN.
   # gateway:
   #   image: tiybai-omnibutler
+  #   command: ["gateway"]
+  #   environment:
+  #     OMNIBUTLER_GATEWAY_TOKEN: "change-me"
+  #   volumes:
+  #     - ./omnibutler-home:/home/omnibutler/.omnibutler
   #   ports:
   #     - "8767:8767"
