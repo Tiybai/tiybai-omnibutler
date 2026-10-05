@@ -8,6 +8,7 @@ Own code: **Apache-2.0** (see `LICENSE`, `NOTICE`).
 |---|---|---|
 | Python 3.11+ standard library | PSF | runtime |
 | PyYAML >= 6.0 | MIT | scene file parsing (the only runtime dependency) |
+| tinytuya >= 1.13 (optional, extra `tuya`) | MIT | Tuya local-protocol transport for `omnibutler/drivers/tuya.py`; lazily imported, only when the extra is installed |
 | pytest (dev only) | MIT | tests |
 
 Rule: new direct dependencies must be MIT / Apache-2.0 / BSD / PSF / ISC.
@@ -26,7 +27,6 @@ references under the clean-room rules in `clean-room.md`.
 | Zigbee2MQTT | GPL-3.0 | External process; if used, it is reached over MQTT, never linked. |
 | Gadgetbridge | AGPL-3.0 | External Android app; phone-gateway mode talks to it via its public intents/APIs, never merged into this tree. |
 | tuya-local device data | MIT | Data dependency candidate; entries carry their own source/provenance fields (see device-data/README.md). |
-| tinytuya | MIT | Candidate permissive dependency for a future Tuya driver; evaluate at integration time. |
 | msmart-ng | MIT | Candidate permissive dependency for a future Midea driver; evaluate at integration time. |
 | matter.js | Apache-2.0 | Candidate dependency for a future Matter controller; evaluate at integration time. |
 | python-broadlink | MIT | Candidate dependency for infrared fallback; evaluate at integration time. |

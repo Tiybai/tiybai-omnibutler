@@ -16,7 +16,7 @@ MCP - and execute personal-life scenes deterministically and locally.
  [3] core              omnibutler/core/         capability model, registry,
       |                                          event bus, audit, manager
  [2] drivers           omnibutler/drivers/      one adapter per channel:
-      |                                          mock - homeassistant - (miio, tuya planned)
+      |                                          mock - homeassistant - miio - tuya
  [1] device-data       device-data/             per-model facts and mappings
       |
  devices               AC - lights - purifier - curtains - scale - garage ...
@@ -41,8 +41,9 @@ A driver adapts one access channel to the model: `discover`,
 `list_devices`, `get_state`, `set_property`, `call_action`. The mock driver
 ships a full virtual home so the whole stack runs with no hardware. The
 Home Assistant driver reuses an existing HA installation over its REST API.
-Vendor-local drivers (Xiaomi miIO, Tuya local) are planned integration
-points, gated by the clean-room process in `clean-room.md`.
+Vendor-local drivers (Xiaomi miIO, Tuya local) are implemented behind
+clean-room protocol specs (see `docs/specs/` and `clean-room.md`) and are
+awaiting real-hardware verification.
 
 ### device-data
 Per-model fact files (capabilities, ranges, vendor mapping identifiers)

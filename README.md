@@ -41,7 +41,7 @@ sits in the middle:
  agents (MCP)  ->  mcp_server  ->  scene engine  ->  core (model/registry/
                                                       events/audit/manager)
                                                       |
-                                    drivers: mock | homeassistant | (miio, tuya planned)
+                                    drivers: mock | homeassistant | miio | tuya
                                                       |
                                     device-data (per-model facts)
 ```
@@ -116,14 +116,17 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.1 (this release) - core model, mock driver, Home Assistant driver,
-scene engine with the high-risk guardrail, MCP server, CLI, full test suite.
-Xiaomi miIO and Tuya local drivers exist as documented integration points
-(`omnibutler/drivers/miio.py`, `tuya.py`) and are **not** functional yet.
+v0.2 (this release) - Xiaomi miIO and Tuya local drivers implemented behind
+clean-room protocol specs (`docs/specs/`), tested end-to-end against
+in-process fake devices; **not yet verified on real hardware** - per-model
+property maps may need adjustment for your unit. device-data grew to 10
+model profiles. HA driver and scene engine hardened (retries, error
+classes, time-window and state conditions).
 
-- [ ] v0.2 - first real local drivers behind clean-room specs; device-data
+- [x] v0.2 - first real local drivers behind clean-room specs; device-data
       contributions open
-- [ ] v0.3 - phone-gateway mode (wearables / health read-only pipelines)
+- [ ] v0.3 - real-hardware verification round; phone-gateway mode
+      (wearables / health read-only pipelines)
 - [ ] v0.4 - Matter controller, Zigbee via external Zigbee2MQTT over MQTT
 - [ ] Later - terminal mode for open smart glasses; vendor-cloud fallbacks
 

@@ -15,6 +15,8 @@ import yaml
 from omnibutler.core.models import RiskLevel
 from omnibutler.scenes.model import (
     COMPARISON_OPS,
+    CONDITION_TYPES,
+    OP_ALIASES,
     TRIGGER_TYPES,
     Scene,
     SceneAction,
@@ -29,6 +31,33 @@ class SceneValidationError(ValueError):
 
 def _fail(scene_name: str, message: str) -> None:
     raise SceneValidationError(f"scene {scene_name!r}: {message}")
+
+
+def _parse_hhmm(value: Any, scene_name: str, field_name: str) -> str:
+    """Normalise a time-of-day to "HH:MM" or fail with a specific message.
+
+    Accepts "HH:MM" strings; bare ints are minutes since midnight (which is
+    also what YAML 1.1 makes of an unquoted ``22:00`` - a sexagesimal int);
+    ``datetime.time`` values come from unquoted ``HH:MM:SS`` scalars.
+    """
+    import datetime as _dt
+
+    if isinstance(value, _dt.time):
+        return f"{value.hour:02d}:{value.minute:02d}"
+    if isinstance(value, bool):
+        _fail(scene_name, f"{field_name} must be HH:MM, got {value!r}")
+    if isinstance(value, int):
+        if 0 <= value < 24 * 60:
+            return f"{value // 60:02d}:{value % 60:02d}"
+        _fail(scene_name, f"{field_name} minutes-since-midnight out of range: {value!r}")
+    if isinstance(value, str):
+        parts = value.strip().split(":")
+        if len(parts) == 2 and all(p.isdigit() for p in parts):
+            hour, minute = int(parts[0]), int(parts[1])
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+    _fail(scene_name, f"{field_name} must be HH:MM, got {value!r}")
+    raise AssertionError("unreachable")  # _fail always raises
 
 
 def parse_scene(raw: Any, source: str | None = None) -> Scene:
@@ -72,12 +101,39 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
     for idx, cond_raw in enumerate(raw.get("conditions") or []):
         if not isinstance(cond_raw, dict):
             _fail(name, f"conditions[{idx}] must be a mapping")
+        window_raw = cond_raw.get("time_window")
+        cond_type = cond_raw.get("type")
+        if cond_type is None and window_raw is not None:
+            cond_type = "time_window"
+        if cond_type is None:
+            cond_type = "state"
+        if cond_type not in CONDITION_TYPES:
+            _fail(name, f"conditions[{idx}].type must be one of "
+                        f"{sorted(CONDITION_TYPES)}, got {cond_type!r}")
+        if cond_type == "time_window":
+            # Two spellings: flat {type: time_window, start, end} or nested
+            # {time_window: {start, end}}.
+            if window_raw is not None and not isinstance(window_raw, dict):
+                _fail(name, f"conditions[{idx}].time_window must be a mapping "
+                            "with 'start' and 'end'")
+            source = window_raw if isinstance(window_raw, dict) else cond_raw
+            if source.get("start") is None or source.get("end") is None:
+                _fail(name, f"conditions[{idx}] time_window requires both "
+                            "'start' and 'end' (HH:MM)")
+            conditions.append(SceneCondition(
+                type="time_window",
+                start=_parse_hhmm(source["start"], name,
+                                  f"conditions[{idx}].time_window.start"),
+                end=_parse_hhmm(source["end"], name,
+                                f"conditions[{idx}].time_window.end"),
+            ))
+            continue
         for field_name in ("device", "property"):
             if not cond_raw.get(field_name):
                 _fail(name, f"conditions[{idx}] is missing {field_name!r}")
-        op = cond_raw.get("op", "==")
+        op = OP_ALIASES.get(cond_raw.get("op", "=="), cond_raw.get("op", "=="))
         if op not in COMPARISON_OPS:
-            _fail(name, f"conditions[{idx}].op must be one of {sorted(COMPARISON_OPS)}, got {op!r}")
+            _fail(name, f"conditions[{idx}].op must be one of {sorted(COMPARISON_OPS)}, got {cond_raw.get('op')!r}")
         if op not in {"truthy", "falsy"} and "value" not in cond_raw:
             _fail(name, f"conditions[{idx}] with op {op!r} requires a 'value'")
         conditions.append(SceneCondition(

@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from omnibutler.core.errors import DriverNotConfiguredError, PlannedDriverError
+from omnibutler.core.errors import (
+    DeviceNotFoundError,
+    DriverNotConfiguredError,
+    PlannedDriverError,
+)
 from omnibutler.drivers.homeassistant import HomeAssistantDriver
 from omnibutler.drivers.miio import MiioDriver
 from omnibutler.drivers.tuya import TuyaDriver
@@ -15,12 +19,24 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_planned_drivers_are_honest():
-    for driver in (MiioDriver(), TuyaDriver()):
-        assert driver.list_devices() == []
-        assert driver.discover() == []
-        with pytest.raises(PlannedDriverError) as exc:
-            driver.set_property("x", "onoff", True)
-        assert "planned but not implemented" in str(exc.value)
+    driver = TuyaDriver()
+    assert driver.list_devices() == []
+    assert driver.discover() == []
+    with pytest.raises(PlannedDriverError) as exc:
+        driver.set_property("x", "onoff", True)
+    assert "planned but not implemented" in str(exc.value)
+
+
+def test_miio_driver_is_implemented_and_honest_when_unconfigured(monkeypatch):
+    # miio shipped in v0.2: with no devices configured it is simply empty,
+    # and unknown device ids are reported as such (no PlannedDriverError).
+    monkeypatch.delenv("MIIO_DEVICES", raising=False)
+    monkeypatch.delenv("MIIO_HOST", raising=False)
+    monkeypatch.delenv("MIIO_TOKEN", raising=False)
+    driver = MiioDriver()
+    assert driver.list_devices() == []
+    with pytest.raises(DeviceNotFoundError):
+        driver.set_property("x", "onoff", True)
 
 
 def test_homeassistant_requires_config(monkeypatch):

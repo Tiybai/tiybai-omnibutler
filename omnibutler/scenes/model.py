@@ -14,6 +14,13 @@ from omnibutler.core.models import RiskLevel
 
 TRIGGER_TYPES = {"state_change", "schedule", "geofence"}
 COMPARISON_OPS = {"==", "!=", ">", "<", ">=", "<=", "in", "truthy", "falsy"}
+CONDITION_TYPES = {"state", "time_window"}
+#: Friendly spellings accepted in scene files for state-condition operators.
+OP_ALIASES = {
+    "equals": "==", "eq": "==", "not_equals": "!=", "ne": "!=",
+    "greater_than": ">", "gt": ">", "less_than": "<", "lt": "<",
+    "at_least": ">=", "gte": ">=", "at_most": "<=", "lte": "<=",
+}
 
 
 @dataclass
@@ -31,10 +38,24 @@ class SceneTrigger:
 
 @dataclass
 class SceneCondition:
-    device: str
-    property: str
+    """One AND-ed scene condition.
+
+    ``type == "state"`` (the default, and the only kind before v0.3):
+    compare ``device``'s ``property`` against ``value`` with ``op``.
+
+    ``type == "time_window"``: holds while the local time of day is inside
+    the ``start``-``end`` window ("HH:MM", start inclusive, end exclusive).
+    Windows may cross midnight (start > end, e.g. 22:00-06:00); start == end
+    means the whole day.
+    """
+
+    device: str | None = None
+    property: str | None = None
     op: str = "=="
     value: Any = None
+    type: str = "state"
+    start: str | None = None  # time_window only, "HH:MM"
+    end: str | None = None    # time_window only, "HH:MM"
 
 
 @dataclass

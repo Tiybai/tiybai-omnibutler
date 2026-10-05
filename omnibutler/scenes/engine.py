@@ -5,13 +5,24 @@ matches, evaluates all conditions (AND semantics), then runs the actions
 through the DeviceManager. Safety guardrail: any action whose effective risk
 is *high* - from the scene, the action, or the target device - is never
 executed; it is parked in the confirmation queue for a human instead.
+
+Conditions come in two kinds (see scenes/model.py): *state* conditions
+compare a device property against a threshold, and *time_window* conditions
+hold only inside a local time-of-day window (which may cross midnight).
+When a scene is skipped because a condition does not hold, the specific
+reason is written to the audit log - the execution report keeps the stable
+"conditions not met" marker. The clock is injectable (``clock=`` callable
+returning minutes since midnight, "HH:MM", or a time/datetime) so tests and
+replays stay deterministic; by default the event's own "time" field is used
+when present, else the local wall clock.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from omnibutler.core.confirmations import ConfirmationQueue
 from omnibutler.core.events import Event
@@ -72,15 +83,45 @@ def _compare(actual: Any, op: str, expected: Any) -> bool:
     return False
 
 
+def _hhmm_to_minutes(value: Any) -> int | None:
+    """Minutes since midnight for "HH:MM" / time / datetime, else None."""
+    if isinstance(value, _dt.datetime):
+        return value.hour * 60 + value.minute
+    if isinstance(value, _dt.time):
+        return value.hour * 60 + value.minute
+    if isinstance(value, str):
+        parts = value.strip().split(":")
+        if len(parts) == 2 and all(p.isdigit() for p in parts):
+            hour, minute = int(parts[0]), int(parts[1])
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return hour * 60 + minute
+    return None
+
+
+def _minutes_to_hhmm(minutes: int) -> str:
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _in_time_window(now: int, start: int, end: int) -> bool:
+    """Start inclusive, end exclusive; start > end crosses midnight."""
+    if start == end:
+        return True  # a degenerate window means the whole day
+    if start < end:
+        return start <= now < end
+    return now >= start or now < end
+
+
 class SceneEngine:
     def __init__(
         self,
         manager: DeviceManager,
         confirmations: ConfirmationQueue | None = None,
+        clock: Callable[[], Any] | None = None,
     ) -> None:
         self.manager = manager
         self.confirmations = confirmations if confirmations is not None else ConfirmationQueue()
         self.scenes: dict[str, Scene] = {}
+        self.clock = clock
 
     def add_scene(self, scene: Scene) -> Scene:
         self.scenes[scene.name] = scene
@@ -126,15 +167,52 @@ class SceneEngine:
             return True
         return False
 
-    def _conditions_hold(self, conditions: list[SceneCondition]) -> bool:
+    # -- conditions ---------------------------------------------------------
+    def _now_minutes(self, event: Event | None = None) -> int:
+        """Current time of day in minutes: injected clock > event > wall."""
+        if self.clock is not None:
+            provided = self.clock()
+            if isinstance(provided, int) and not isinstance(provided, bool):
+                return provided % (24 * 60)
+            parsed = _hhmm_to_minutes(provided)
+            if parsed is not None:
+                return parsed
+        if event is not None:
+            parsed = _hhmm_to_minutes(event.get("time"))
+            if parsed is not None:
+                return parsed
+        now = time.localtime()
+        return now.tm_hour * 60 + now.tm_min
+
+    def _condition_failure(
+        self, conditions: list[SceneCondition], event: Event
+    ) -> str | None:
+        """None when every condition holds, else the first failure's reason."""
         for condition in conditions:
+            if condition.type == "time_window":
+                now = self._now_minutes(event)
+                start = _hhmm_to_minutes(condition.start)
+                end = _hhmm_to_minutes(condition.end)
+                if start is None or end is None or not _in_time_window(now, start, end):
+                    return (
+                        f"outside time window {condition.start}-{condition.end} "
+                        f"(now {_minutes_to_hhmm(now)})"
+                    )
+                continue
             device = self.manager.registry.find(condition.device)
             if device is None:
-                return False
+                return f"state condition not met: device {condition.device!r} not found"
             actual = device.state.get(condition.property)
             if not _compare(actual, condition.op, condition.value):
-                return False
-        return True
+                return (
+                    f"state condition not met: {condition.device}."
+                    f"{condition.property} is {actual!r} "
+                    f"(expected {condition.op} {condition.value!r})"
+                )
+        return None
+
+    def _conditions_hold(self, conditions: list[SceneCondition]) -> bool:
+        return self._condition_failure(conditions, Event(type="internal")) is None
 
     # -- execution ----------------------------------------------------------
     def handle_event(self, event: Event) -> ExecutionReport:
@@ -146,8 +224,18 @@ class SceneEngine:
             if not self._trigger_matches(scene.trigger, event):
                 continue
             report.evaluated.append(scene.name)
-            if not self._conditions_hold(scene.conditions):
+            failure = self._condition_failure(scene.conditions, event)
+            if failure is not None:
                 report.skipped[scene.name] = "conditions not met"
+                self.manager.audit.record(
+                    agent=f"scene:{scene.name}",
+                    device_id=scene.name,
+                    action="scene:skipped",
+                    params={"event": event.type, "reason": failure},
+                    result={"scene": scene.name, "skipped": True},
+                    ok=False,
+                    error=failure,
+                )
                 continue
             for action in scene.actions:
                 report.outcomes.append(self._run_action(scene, action, event))
