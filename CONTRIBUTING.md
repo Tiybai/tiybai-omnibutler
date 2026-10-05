@@ -34,6 +34,19 @@ tob devices
 tob simulate
 ```
 
+## Before you open a PR
+
+Run the same checks CI runs - all three must pass:
+
+```bash
+ruff check omnibutler tests scripts
+mypy omnibutler
+python -m pytest -q
+```
+
+The ruff and mypy settings live in `pyproject.toml`; please don't
+weaken them to make a failure go away.
+
 ## Pull request types
 
 ### Bug fix / core change

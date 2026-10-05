@@ -78,9 +78,14 @@ Devices do not all join the same way. The architecture recognises five:
 | D. Terminal app | the agent's front-end runs *on* the device | smart glasses, open watch faces, drones |
 | E. Vendor cloud | vendor API as a fallback channel | cloud-only brands, remote access |
 
-v0.1 implements mode A/E through the Home Assistant driver and demos mode A
-with the mock driver. Modes B-D are roadmap items; the core model (entity /
-data stream / terminal session) already distinguishes them.
+Modes A and E shipped first, through the Home Assistant driver, the
+vendor-local drivers and the cloud fallbacks. Modes B-D landed in v0.4:
+the phone gateway relays what a companion app owns (B), read-only
+sources are exposed as data streams (C), and terminal sessions run on
+end devices such as glasses (D). All five modes are implemented
+against fake devices so far - real-hardware verification is still
+outstanding. The core model (entity / data stream / terminal session)
+keeps the modes distinct so each can mature independently.
 
 ## Runtime flow (an "arrive home" scene)
 

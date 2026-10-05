@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,7 +21,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       - name: Tests
-        run: python -m pytest -q
+        # Coverage floor is 80: measured coverage is 87% (Oct 2026),
+        # so 80 leaves headroom for small fluctuations and for parallel
+        # feature work landing between runs, while still catching a
+        # real regression (a new module shipping without tests).
+        run: python -m pytest -q --cov=omnibutler --cov-fail-under=80
       - name: Secret scan (filenames)
         run: |
           if git ls-files | grep -Ei '(token|secret|\.env)' | grep -v '.gitignore'; then

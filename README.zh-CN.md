@@ -50,7 +50,7 @@ git clone https://github.com/Tiybai/tiybai-omnibutler.git
 cd tiybai-omnibutler
 pip install -e .
 
-tob devices                 # 一个虚拟的家：2 台空调、净化器、灯、窗帘、体脂秤、车库门
+tob devices                 # 一个虚拟的家：2 台空调、净化器、灯、窗帘、体脂秤、车库门、扫地机器人
 tob devices --state         # 带实时状态
 tob set living_ac onoff true
 tob set living_ac target_temperature 24
@@ -108,7 +108,9 @@ v0.4 新增：`tob onboard` 一次扫遍所有驱动、用大白话说清每台�
 取回来（撞验证码/两步验证会明确停下，不硬闯）；`tob gateway` 接收
 手机上报的数据流和到家/离家地理围栏事件；`tob streams` 查看手机已
 上报的数据，`tob discover` 列出每个驱动在网络上能看到什么，
-`tob state` 打印一台设备的完整当前状态。
+`tob state` 打印一台设备的完整当前状态。日常运维有 `tob audit`
+回看审计日志，`tob backup` / `tob restore` 把配置和状态打成一个
+文件，管家换机器直接搬。
 
 高风险设备（演示家里的车库门）按设计拒绝工具直控。可以试一下：让 Agent
 开车库门会被拒绝；再用场景请求开门（`examples/scenes/garage-arrival.yaml`），
@@ -126,7 +128,17 @@ v0.4 新增：`tob onboard` 一次扫遍所有驱动、用大白话说清每台�
 
 ## 状态与路线图
 
-v0.8（本版）：扫地机器人加入小米本地驱动（开始/停止/回充、电量
+v0.9（本版）：最后一遍扫尾——场景支持延时动作（`- delay: 300`，
+灯自己会关、扫地机等你出门再开工）；HA 驱动订阅事件流，状态变化
+近实时进场景引擎，不用再等 30 秒轮询；第三方驱动可以打成 pip 包
+发布（入口点组 `omnibutler.drivers`），加设备不用 fork 本仓；
+新增 `tob audit` 与 `tob backup` / `tob restore` 运维命令；
+daemon 加单实例锁，同一状态目录拒绝双开；CI 加覆盖率地板（80%，
+现状 87%）与 Python 3.13 测试矩阵；device-data 增至 20 份，演示家
+添一台扫地机器人。实机验证顺延 v0.10——仍然需要有真设备的朋友
+（见 issue #2 / #4）。
+
+v0.8：扫地机器人加入小米本地驱动（开始/停止/回充、电量
 读取，走 MIOT 标准 vacuum 服务），小米云兜底自动继承新族；高风险
 动作排队时可推送 webhook 通知（`OMNIBUTLER_NOTIFY_WEBHOOK_URL`
 或配置里的 `notify.webhook_url`，ntfy、Bark 这类服务都能接），
@@ -174,7 +186,9 @@ zigbee2mqtt / gateway / tuya_cloud 四份指南。全部仍然只经假
       窗帘电机；场景持续条件（for_seconds）
 - [x] v0.8 — 小米扫地机器人族；确认排队 webhook 推送；场景日程
       支持 days；CI 加 ruff + mypy 门禁
-- [ ] v0.9 — 实机验证轮次（需要有真设备的朋友，见 issue #2 / #4）
+- [x] v0.9 — 场景延时动作；HA 事件订阅；第三方驱动入口点；
+      audit/backup 命令；daemon 单实例锁；CI 覆盖率门禁
+- [ ] v0.10 — 实机验证轮次（需要有真设备的朋友，见 issue #2 / #4）
 - [ ] 之后 — PyPI 正式发布（需要维护者本人的 PyPI 账号）
 
 ## 贡献设备

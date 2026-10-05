@@ -1,0 +1,12 @@
+name: leave-home-vacuum
+description: When the phone leaves the home geofence, send the robot vacuum out to clean the empty home.
+risk: low
+enabled: true
+trigger:
+  type: geofence
+  zone: home
+  transition: exit
+conditions: []
+actions:
+  - device: living_room_vacuum
+    set: {onoff: true}

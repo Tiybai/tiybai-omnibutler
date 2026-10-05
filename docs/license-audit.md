@@ -27,7 +27,7 @@ references under the clean-room rules in `clean-room.md`.
 | Project | Licence | Relationship |
 |---|---|---|
 | Home Assistant | Apache-2.0 | External system; we call its REST API. HA integrations a user installs are the user's choice. |
-| python-miio | GPL-3.0 | Reference only (protocol facts via spec process); future miIO driver is clean-room or process-isolated - decided per driver before merge. |
+| python-miio | GPL-3.0 | Reference only (protocol facts via spec process); the miIO driver is an original clean-room implementation shipped in v0.2, written from the spec in `docs/specs/miio-protocol.md`. |
 | Zigbee2MQTT | GPL-3.0 | External process; if used, it is reached over MQTT, never linked. |
 | Gadgetbridge | AGPL-3.0 | External Android app; phone-gateway mode talks to it via its public intents/APIs, never merged into this tree. |
 | tuya-local device data | MIT | Data dependency candidate; entries carry their own source/provenance fields (see device-data/README.md). |

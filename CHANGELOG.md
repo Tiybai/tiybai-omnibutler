@@ -1,0 +1,170 @@
+# Changelog
+
+All notable changes to Tiybai OmniButler are recorded here, one entry per
+release. The format follows [Keep a Changelog](https://keepachangelog.com/).
+For the full release notes, see
+[GitHub Releases](https://github.com/Tiybai/tiybai-omnibutler/releases).
+
+Every driver below is tested against fake devices unless noted otherwise -
+real-hardware verification is still the project's open gap.
+
+## [0.9.0] - 2026-10-05
+
+### Added
+- Delayed scene actions (`- delay: <seconds>` between actions; a
+  re-trigger restarts the timer, and a delayed high-risk action still
+  queues for human confirmation when it comes due).
+- Home Assistant event-stream subscription (WebSocket): state changes
+  reach the scene engine near-instantly; the 30-second poll stays as
+  fallback and the two paths de-duplicate against one snapshot.
+- Third-party drivers as pip packages (entry point group
+  `omnibutler.drivers`) - no fork needed. Built-ins win name
+  conflicts; a broken package is skipped with a clear error.
+- `tob audit` reads the audit log back across rotated files;
+  `tob backup` / `tob restore` pack config and state into one tarball
+  (restore keeps a .bak and rejects unsafe member paths).
+- device-data: generic Matter light and Zigbee smart-plug profiles
+  (20 in total); the mock demo home gains a robot vacuum.
+
+### Changed
+- The daemon takes a single-instance lock per state directory and
+  refuses to start twice (the stale lock of a dead process is taken
+  over with a note).
+- CI: coverage floor of 80% (currently 87%), test matrix adds
+  Python 3.13; `pip install tiybai-omnibutler[all]` installs every
+  driver extra; the package ships `py.typed`.
+
+## [0.8.0] - 2026-10-05
+
+### Added
+- Xiaomi robot vacuums in the local miio driver (start / stop / return to
+  dock, battery level) via the standard MIOT vacuum service; the Xiaomi
+  cloud fallback inherits the family. device-data grows to 18 profiles.
+- Webhook notification when a high-risk action is parked in the
+  confirmation queue (`OMNIBUTLER_NOTIFY_WEBHOOK_URL` or
+  `notify.webhook_url`) - a headless bridge no longer queues in silence.
+
+### Changed
+- Scene schedules accept `days`, so "weekdays at 07:30" finally works.
+- CI gains lint (ruff) and type-check (mypy) gates; both clean.
+
+## [0.7.0] - 2026-10-05
+
+### Added
+- Xiaomi light, fan and humidifier families (standard MIOT services);
+  the Xiaomi cloud fallback picks them up automatically.
+- Tuya curtain motors (open/close + position), matching their
+  device-data profile.
+- Scene state conditions accept `for_seconds` - a value must hold for a
+  duration, not just spike, before a scene fires.
+
+### Changed
+- Audit log and data streams rotate by size (default 10 MiB x 5,
+  tunable), so a long-running butler cannot fill the disk.
+- `tob doctor` reports the state directory's total size.
+
+## [0.6.1] - 2026-10-05
+
+### Added
+- CI gains gitleaks secret scanning (working tree and history) and a
+  dependency licence gate.
+- `tob doctor` reports whether cloud-fallback credentials are present -
+  never their values.
+
+### Fixed
+- Removed stale "gateway not implemented" notes from the Dockerfile,
+  compose example and install docs; the gateway shipped in v0.4/v0.5.
+
+## [0.6.0] - 2026-10-05
+
+### Added
+- Xiaomi cloud fallback driver (`--driver xiaomi_cloud`): when a Xiaomi
+  device cannot be reached locally, it can be controlled through the
+  vendor cloud using the same login machinery as `tob fetch-keys` and
+  the same MIOT property mapping as the local driver. Like `tuya_cloud`
+  it is deliberately not part of `all`.
+- device-data grows to 14 profiles (Zigbee door and motion sensors, a
+  generic Matter plug, a Tuya curtain motor).
+
+## [0.5.1] - 2026-10-05
+
+### Changed
+- Every config write path (setup key storage, fetch-keys merge) now goes
+  through the single versioned `save_config`, so the version stamp and
+  one-time backup apply everywhere; `config.example.json` carries the
+  top-level `"version": 1`.
+
+## [0.5.0] - 2026-10-05
+
+### Added
+- MCP surface covers data streams and terminal sessions (12 tools).
+- The phone gateway can run inside the daemon (`tob run --gateway`) -
+  one process, scenes fire exactly once.
+- Config files are versioned: a missing version reads as v1, a
+  newer-than-supported version is a hard error, and the first rewrite
+  keeps a one-time backup.
+- Tuya cloud fallback driver (`--driver tuya_cloud`) for devices with no
+  local path; going cloud is always an explicit choice.
+- `tob streams` command; `tob setup` guides for matter, zigbee2mqtt,
+  gateway and tuya_cloud.
+
+### Changed
+- `tob doctor` also checks Matter controller and Zigbee2MQTT broker
+  reachability and config-version health.
+
+## [0.4.0] - 2026-10-05
+
+### Added
+- Matter driver (controller-client mode over WebSocket against a
+  matterjs-server-class service; pairing codes are only forwarded).
+- Zigbee2MQTT driver.
+- Phone gateway and data streams (`tob gateway`, port 8767, its own
+  token); geofence events can trigger scenes.
+- Terminal sessions (demo glasses display/speak, session open/close
+  scene triggers).
+- `tob onboard` scan reporting what each device still needs, and
+  `tob fetch-keys` cloud key retrieval for Xiaomi/Tuya (stops plainly
+  at captcha / 2FA instead of guessing).
+- Docker, launchd and systemd packaging; bundled scenes ship inside
+  the wheel.
+
+## [0.3.1] - 2026-10-05
+
+### Added
+- Approvals web page (`tob approvals`) and macOS popup notifications
+  for the human confirmation queue.
+
+## [0.3.0] - 2026-10-05
+
+### Added
+- Midea driver (msmart-ng) and Broadlink driver (learn / send IR codes).
+- `tob run` resident daemon; `tob mcp --http` with a mandatory token.
+- `tob doctor` real health checks and `tob setup` plain-language key
+  guides.
+
+### Changed
+- Human-only confirmations enforced in code: there is no MCP approve
+  tool, the queue persists on disk across processes, and approval
+  happens only via `tob pending` / `tob confirm` / `tob reject` on
+  the host.
+
+## [0.2.0] - 2026-10-05
+
+### Added
+- First real local drivers: the miio (Xiaomi) driver, an original
+  clean-room implementation written from the protocol spec in
+  `docs/specs/`, and a Tuya local driver via tinytuya.
+- device-data grows to 10 profiles; Home Assistant driver and scene
+  engine improvements.
+
+## [0.1.0] - 2026-10-05
+
+### Added
+- Core capability model, device registry, event bus and append-only
+  audit log.
+- Mock driver with a 7-device virtual home; Home Assistant REST driver.
+- Deterministic local scene engine; high-risk actions are diverted to
+  a human confirmation queue instead of executing.
+- Zero-dependency MCP server (stdio, 8 tools) and the `tob` CLI.
+- device-data format, plus clean-room, licence and security docs;
+  bilingual README and CI.

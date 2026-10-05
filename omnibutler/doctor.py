@@ -583,6 +583,32 @@ def _check_cloud_fallbacks(config: Mapping[str, Any],
     )
 
 
+def _check_third_party_drivers() -> CheckResult:
+    """Third-party drivers installed via entry points: did they load?
+
+    Loading is isolated (see omnibutler.runtime.third_party_drivers):
+    a broken package is reported here and skipped everywhere else, so
+    it can never fail this report - it is a WARN, not a FAIL.
+    """
+    from omnibutler.runtime import third_party_drivers
+
+    statuses = third_party_drivers()
+    if not statuses:
+        return CheckResult(
+            "third-party drivers", OK,
+            "none installed - extra drivers can be added with pip, "
+            "see docs/drivers-third-party.md")
+    parts: list[str] = []
+    worst = OK
+    for status in statuses:
+        if status.ok:
+            parts.append(f"{status.name} (loaded)")
+        else:
+            parts.append(f"{status.name} (NOT loaded: {status.error})")
+            worst = WARN
+    return CheckResult("third-party drivers", worst, "; ".join(parts))
+
+
 def _human_size(num_bytes: int) -> str:
     """A byte count the way a human reads it: 812 B, 3.2 MB, 1.4 GB."""
     size = float(num_bytes)
@@ -734,6 +760,7 @@ def check_all(
     results.append(_check_gateway_token(environ))
     results.append(_check_notify_webhook(config, environ))
     results.append(_check_cloud_fallbacks(config, environ))
+    results.append(_check_third_party_drivers())
     results.append(_check_state_dir(runtime))
     results.append(_check_scenes(scenes_dir))
     return results

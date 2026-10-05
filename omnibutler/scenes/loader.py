@@ -16,12 +16,14 @@ from omnibutler.core.models import RiskLevel
 from omnibutler.scenes.model import (
     COMPARISON_OPS,
     CONDITION_TYPES,
+    MAX_DELAY_SECONDS,
     OP_ALIASES,
     TRIGGER_TYPES,
     WEEKDAY_ABBREVIATIONS,
     Scene,
     SceneAction,
     SceneCondition,
+    SceneDelay,
     SceneTrigger,
 )
 
@@ -185,10 +187,31 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
     actions_raw = raw.get("actions")
     if not isinstance(actions_raw, list) or not actions_raw:
         _fail(name, "'actions' must be a non-empty list")
-    actions: list[SceneAction] = []
+    actions: list[SceneAction | SceneDelay] = []
     for idx, act_raw in enumerate(actions_raw):
         if not isinstance(act_raw, dict):
             _fail(name, f"actions[{idx}] must be a mapping")
+        if "delay" in act_raw:
+            # A pause between actions: ``- delay: <seconds>``. It is the
+            # only key allowed on the item - a delay has no device, no
+            # value and no risk of its own.
+            extra = sorted(set(act_raw) - {"delay"})
+            if extra:
+                _fail(name, f"actions[{idx}] 'delay' cannot be combined "
+                            f"with {extra}")
+            seconds = act_raw["delay"]
+            if (isinstance(seconds, bool)
+                    or not isinstance(seconds, (int, float))
+                    or not 0 < seconds <= MAX_DELAY_SECONDS):
+                _fail(name, f"actions[{idx}].delay must be a number of "
+                            f"seconds greater than 0 and at most "
+                            f"{MAX_DELAY_SECONDS:g}, got {seconds!r}")
+            if idx == len(actions_raw) - 1:
+                _fail(name, f"actions[{idx}] is a delay with nothing "
+                            "after it - a delay must be followed by the "
+                            "actions it postpones")
+            actions.append(SceneDelay(seconds=float(seconds)))
+            continue
         device = act_raw.get("device")
         if not device:
             _fail(name, f"actions[{idx}] is missing 'device'")

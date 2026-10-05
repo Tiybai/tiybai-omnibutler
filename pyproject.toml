@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tiybai-omnibutler"
-version = "0.8.0"
+version = "0.9.0"
 description = "Tiybai OmniButler - an open smart-device bridge that lets AI agents (Muse, OpenClaw, Hermes) control smart devices via MCP."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -20,18 +20,30 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Home Automation",
 ]
 dependencies = ["PyYAML>=6.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "cryptography>=41.0"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "cryptography>=41.0"]
 miio = ["cryptography>=41.0"]
 tuya = ["tinytuya>=1.13"]
 broadlink = ["python-broadlink"]
 midea = ["msmart-ng"]
 matter = ["websockets>=12.0"]
 zigbee = ["paho-mqtt>=1.6"]
+homeassistant = ["websockets>=12.0"]
+# Every driver extra at once (the union of the driver extras above,
+# spelled out so resolvers do not need self-referential extras).
+all = [
+    "cryptography>=41.0",
+    "tinytuya>=1.13",
+    "python-broadlink",
+    "msmart-ng",
+    "websockets>=12.0",
+    "paho-mqtt>=1.6",
+]
 
 [project.urls]
 Homepage = "https://github.com/Tiybai/tiybai-omnibutler"
@@ -39,6 +51,7 @@ Repository = "https://github.com/Tiybai/tiybai-omnibutler"
 Issues = "https://github.com/Tiybai/tiybai-omnibutler/issues"
 Changelog = "https://github.com/Tiybai/tiybai-omnibutler/releases"
 
+# Third-party drivers register in the "omnibutler.drivers" entry-point group (see docs/drivers-third-party.md); this package declares none itself.
 [project.scripts]
 tob = "omnibutler.cli:main"
 
@@ -47,6 +60,12 @@ packages = ["omnibutler"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# Bare `pytest --cov` measures the same thing CI gates on. The floor
+# itself (fail-under) is set in the CI test step, not here, so local
+# partial runs (a single test file) do not fail spuriously.
+source = ["omnibutler"]
 
 [tool.ruff]
 # The codebase wraps most lines well under this; 100 leaves room for the

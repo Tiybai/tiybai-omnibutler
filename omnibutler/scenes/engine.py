@@ -21,6 +21,18 @@ reason is written to the audit log - the execution report keeps the stable
 returning minutes since midnight, "HH:MM", or a time/datetime) so tests and
 replays stay deterministic; by default the event's own "time" field is used
 when present, else the local wall clock.
+
+An action list may also contain pauses (``- delay: <seconds>``, see
+:class:`SceneDelay`). The actions before a pause run immediately; the
+rest are parked as a pending segment with a monotonic deadline - nothing
+ever sleeps - and run when :meth:`SceneEngine.process_due` finds them
+due (the daemon calls it on every tick; without a daemon they simply
+stay pending). A scene has at most one pending segment: scheduling a
+new one *replaces* the scene's still-pending segment, so re-triggering
+a scene restarts its countdown instead of stacking continuations.
+Delayed actions go through the exact same path as immediate ones, so a
+high-risk action after a delay is parked in the confirmation queue when
+it comes due, exactly as if the delay were not there.
 """
 
 from __future__ import annotations
@@ -35,7 +47,16 @@ from omnibutler.core.confirmations import ConfirmationQueue
 from omnibutler.core.events import Event
 from omnibutler.core.manager import DeviceManager
 from omnibutler.core.models import RiskLevel
-from omnibutler.scenes.model import Scene, SceneCondition, SceneTrigger
+from omnibutler.scenes.model import Scene, SceneCondition, SceneDelay, SceneTrigger
+
+
+@dataclass
+class _DelayedSegment:
+    """Actions parked behind a ``delay``, waiting for their deadline."""
+
+    due: float  # time.monotonic() deadline
+    scene: Scene
+    actions: list  # remaining SceneAction | SceneDelay items, in order
 
 
 @dataclass
@@ -134,6 +155,9 @@ class SceneEngine:
         # Backs `for_seconds` state conditions; entries are only ever
         # written from observed events, never seeded from device state.
         self._value_since: dict[tuple[str, str], tuple[Any, float]] = {}
+        # Post-delay action segments waiting for their pause to elapse,
+        # run by process_due(). At most one per scene (see _schedule_delayed).
+        self._pending_delayed: list[_DelayedSegment] = []
 
     def add_scene(self, scene: Scene) -> Scene:
         self.scenes[scene.name] = scene
@@ -332,8 +356,83 @@ class SceneEngine:
                     error=failure,
                 )
                 continue
-            for action in scene.actions:
-                report.outcomes.append(self._run_action(scene, action, event))
+            self._run_segment(scene, scene.actions, event, report,
+                              time.monotonic())
+        return report
+
+    # -- delayed actions ----------------------------------------------------
+    @property
+    def delayed_pending(self) -> int:
+        """How many post-delay action segments are waiting to come due."""
+        return len(self._pending_delayed)
+
+    def _run_segment(
+        self,
+        scene: Scene,
+        actions: list,
+        event: Event,
+        report: ExecutionReport,
+        now: float,
+    ) -> None:
+        """Run actions in order until a delay (or the end of the list).
+
+        At a :class:`SceneDelay` the remaining actions are parked as a
+        pending segment due ``delay`` seconds after ``now`` and this run
+        stops - the caller never waits. Actions already run are not
+        undone if a later segment is replaced or never comes due.
+        """
+        for position, item in enumerate(actions):
+            if isinstance(item, SceneDelay):
+                remainder = list(actions[position + 1:])
+                if remainder:
+                    self._schedule_delayed(scene, remainder, item.seconds, now)
+                return
+            report.outcomes.append(self._run_action(scene, item, event))
+
+    def _schedule_delayed(
+        self, scene: Scene, actions: list, seconds: float, now: float
+    ) -> None:
+        # Retrigger semantics: ONE pending segment per scene. Scheduling
+        # a new segment discards the scene's still-pending one - the
+        # newest run's timeline supersedes the stale one (coming home
+        # again restarts the hallway light's off-timer) instead of
+        # stacking duplicate continuations that would fire back to back.
+        self._pending_delayed = [
+            pending for pending in self._pending_delayed
+            if pending.scene.name != scene.name
+        ]
+        self._pending_delayed.append(
+            _DelayedSegment(due=now + seconds, scene=scene, actions=actions)
+        )
+
+    def process_due(self, now: float | None = None) -> ExecutionReport:
+        """Run every delayed segment whose pause has elapsed.
+
+        ``now`` is a monotonic timestamp (defaults to the real monotonic
+        clock); tests drive it by patching ``time.monotonic`` or by
+        passing values from the same patched clock. Due segments run in
+        deadline order through the same action path as immediate ones -
+        including the confirmation queue for high-risk actions - and a
+        segment that hits a further delay parks its remainder again.
+        The returned report has ``event_type == "delay"`` and lists the
+        scenes it ran in ``evaluated``.
+        """
+        if now is None:
+            now = time.monotonic()
+        report = ExecutionReport(event_type="delay")
+        due = sorted(
+            (p for p in self._pending_delayed if p.due <= now),
+            key=lambda p: p.due,
+        )
+        if not due:
+            return report
+        self._pending_delayed = [
+            p for p in self._pending_delayed if p.due > now
+        ]
+        for segment in due:
+            report.evaluated.append(segment.scene.name)
+            event = Event(type="delay", source=f"scene:{segment.scene.name}")
+            self._run_segment(segment.scene, segment.actions, event, report, now)
         return report
 
     def _run_action(self, scene: Scene, action, event: Event) -> ActionOutcome:

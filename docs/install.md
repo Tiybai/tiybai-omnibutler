@@ -28,7 +28,10 @@ pip install ".[miio]"       # Xiaomi devices (local miIO protocol)
 pip install ".[tuya]"      # Tuya devices (LAN control)
 pip install ".[broadlink]" # Broadlink IR/RF hubs
 pip install ".[midea]"     # Midea appliances
-pip install ".[miio,tuya,broadlink,midea]"   # everything
+pip install ".[matter]"    # Matter controller client
+pip install ".[zigbee]"    # Zigbee2MQTT
+pip install ".[homeassistant]" # Home Assistant event stream (WebSocket)
+pip install ".[all]"       # everything
 ```
 
 First steps:

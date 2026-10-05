@@ -9,7 +9,15 @@ Configuration comes from the environment, never from code:
                        only entities whose id starts with one of them are
                        surfaced (e.g. "climate.,light.living")
 
-Only the standard library is used (urllib). Requests time out after
+The REST path uses only the standard library (urllib). On top of it the
+driver offers an *optional* WebSocket event subscription
+(``start_event_subscription``): connect to ``/api/websocket``, auth with
+the same token, subscribe to ``state_changed`` and push each change to a
+callback within a second instead of waiting for the daemon's next poll.
+It needs the third-party ``websockets`` library and degrades silently
+when that is missing - REST plus polling remains the fallback.
+
+Requests time out after
 ``timeout`` seconds and are retried once on transient failures (timeouts,
 connection errors, HTTP 5xx). Failures are classified so callers can react:
 
@@ -25,17 +33,22 @@ DriverNotConfiguredError with the remedy in the message.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import os
 import socket
+import threading
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from omnibutler.core.errors import (
     DeviceNotFoundError,
     DriverNotConfiguredError,
     OmniButlerError,
+    PlannedDriverError,
 )
 from omnibutler.core.models import Capability as Cap
 from omnibutler.core.models import Device, Property
@@ -124,6 +137,40 @@ def _parse_prefixes(raw: str | None) -> tuple[str, ...]:
     return tuple(p.strip() for p in raw.split(",") if p.strip())
 
 
+
+
+#: Why the event subscription cannot run without its optional library
+#: (mirrors the Matter driver's wording). The subscription is an extra on
+#: top of the REST driver: without ``websockets`` the driver keeps
+#: working exactly as before and daemon polling stays the state source -
+#: only the near-real-time feed is unavailable.
+_SUBSCRIBE_NOT_INSTALLED = (
+    "websockets is not installed, so the Home Assistant event "
+    "subscription is unavailable; the REST driver and daemon polling "
+    "are unaffected. Install websockets (BSD-3-Clause; see "
+    "docs/license-audit.md) - it also ships with the 'matter' extra - "
+    "to enable the event feed."
+)
+
+
+def _load_websockets() -> Any:
+    """Import the optional websockets library or raise PlannedDriverError."""
+    try:
+        import websockets
+    except ImportError:
+        raise PlannedDriverError(_SUBSCRIBE_NOT_INSTALLED) from None
+    return websockets
+
+
+class _SubscriptionAuthFailed(HomeAssistantAuthError):
+    """HA rejected the token during the WebSocket handshake.
+
+    Kept apart from ordinary connection failures inside the subscription
+    loop: a refused token will not fix itself, so the loop stops instead
+    of reconnecting forever.
+    """
+
+
 class HomeAssistantDriver(Driver):
     name = "homeassistant"
 
@@ -137,6 +184,9 @@ class HomeAssistantDriver(Driver):
         *,
         timeout: float | None = None,
         entity_prefixes: str | tuple[str, ...] | list[str] | None = None,
+        subscribe_events: bool | None = None,
+        reconnect_initial_delay: float = 1.0,
+        reconnect_max_delay: float = 30.0,
     ) -> None:
         self.base_url = (base_url or os.environ.get("HA_URL", "")).rstrip("/")
         self.token = token or os.environ.get("HA_TOKEN", "")
@@ -157,6 +207,30 @@ class HomeAssistantDriver(Driver):
             self.entity_prefixes = tuple(
                 p.strip() for p in entity_prefixes if p and p.strip()
             )
+        # Optional WebSocket event subscription (see
+        # start_event_subscription). Resolution order: the
+        # OMNIBUTLER_HA_NO_SUBSCRIBE kill switch wins over everything,
+        # then the explicit argument (the runtime passes the config
+        # file's ha.subscribe_events here), then the default: enabled.
+        no_subscribe = os.environ.get(
+            "OMNIBUTLER_HA_NO_SUBSCRIBE", "").strip().lower()
+        if no_subscribe in {"1", "true", "yes", "on"}:
+            self.subscribe_events = False
+        elif subscribe_events is not None:
+            self.subscribe_events = bool(subscribe_events)
+        else:
+            self.subscribe_events = True
+        self.reconnect_initial_delay = max(0.0, float(reconnect_initial_delay))
+        self.reconnect_max_delay = max(
+            self.reconnect_initial_delay, float(reconnect_max_delay))
+        self._sub_lock = threading.Lock()
+        self._sub_stop = threading.Event()
+        self._sub_thread: threading.Thread | None = None
+        self._sub_loop: asyncio.AbstractEventLoop | None = None
+        self._sub_task: asyncio.Task[Any] | None = None
+        self._sub_callback: Callable[[str, dict[str, Any]], None] | None = None
+        self._sub_active = False
+        self._sub_callback_errors = 0
 
     @property
     def configured(self) -> bool:
@@ -338,6 +412,209 @@ class HomeAssistantDriver(Driver):
         if device is None:
             raise DeviceNotFoundError(f"unsupported HA entity {device_id!r}")
         return device.state
+
+    # -- WebSocket event subscription (optional) ---------------------------
+    @property
+    def websocket_url(self) -> str:
+        """The HA WebSocket endpoint corresponding to the REST base URL."""
+        if self.base_url.startswith("https://"):
+            url = "wss://" + self.base_url[len("https://"):]
+        elif self.base_url.startswith("http://"):
+            url = "ws://" + self.base_url[len("http://"):]
+        else:
+            url = self.base_url
+        return url + "/api/websocket"
+
+    @property
+    def events_available(self) -> bool:
+        """True when the near-real-time event feed can run right now: the
+        driver is configured, the feed is enabled, and the optional
+        websockets library is importable. Never raises."""
+        if not self.subscribe_events or not self.configured:
+            return False
+        try:
+            _load_websockets()
+        except PlannedDriverError:
+            return False
+        return True
+
+    @property
+    def subscription_active(self) -> bool:
+        """True while a subscription session is live (read-only status)."""
+        return self._sub_active
+
+    def start_event_subscription(
+        self, on_state: Callable[[str, dict[str, Any]], None]
+    ) -> bool:
+        """Push HA state changes to ``on_state(device_id, state)``.
+
+        ``state`` is the same canonical dict :meth:`get_state` returns,
+        computed from each event's ``new_state`` payload with the regular
+        REST mapping. The daemon feeds it into the same snapshot diff it
+        uses for polling, so a change reported by both paths fires once.
+
+        Returns True when the background thread is running. Returns
+        False - silently, by design - when the feed is disabled, the
+        driver is unconfigured, or the websockets library is missing:
+        REST polling remains the fallback in every one of those cases.
+        The callback runs on the subscription thread; exceptions it
+        raises are counted and swallowed so it cannot tear the feed down.
+        """
+        if not self.events_available:
+            return False
+        with self._sub_lock:
+            if self._sub_thread is not None and self._sub_thread.is_alive():
+                return True
+            self._sub_stop.clear()
+            self._sub_callback = on_state
+            self._sub_thread = threading.Thread(
+                target=self._subscription_thread_main,
+                name="omnibutler-ha-events", daemon=True,
+            )
+            self._sub_thread.start()
+            return True
+
+    def stop_event_subscription(self) -> None:
+        """Stop the event feed (idempotent; safe to call when not running)."""
+        self._sub_stop.set()
+        loop, task = self._sub_loop, self._sub_task
+        if loop is not None and task is not None and not loop.is_closed():
+            # The loop may close between the check and the call.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(task.cancel)
+        thread = self._sub_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5)
+        self._sub_thread = None
+        self._sub_active = False
+
+    def _subscription_thread_main(self) -> None:
+        # The loop classifies and handles its own failures; the thread
+        # must never die loudly - polling keeps state fresh regardless
+        # of what happens to the feed.
+        with contextlib.suppress(Exception):
+            asyncio.run(self._subscription_loop())
+
+    async def _subscription_loop(self) -> None:
+        self._sub_loop = asyncio.get_running_loop()
+        self._sub_task = asyncio.current_task()
+        backoff = self.reconnect_initial_delay
+        try:
+            while not self._sub_stop.is_set():
+                try:
+                    await self._subscription_session()
+                    backoff = self.reconnect_initial_delay
+                except _SubscriptionAuthFailed:
+                    break  # a refused token will not fix itself
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass  # transport failure: reconnect after a backoff
+                if self._sub_stop.is_set():
+                    break
+                # Interruptible backoff: poll the stop flag in slices so
+                # stop_event_subscription never waits out a full delay.
+                waited = 0.0
+                while waited < backoff and not self._sub_stop.is_set():
+                    step = min(0.05, backoff - waited)
+                    await asyncio.sleep(step)
+                    waited += step
+                backoff = min(backoff * 2, self.reconnect_max_delay)
+        except asyncio.CancelledError:
+            pass  # cancelled from stop_event_subscription: exit quietly
+        finally:
+            self._sub_active = False
+
+    async def _subscription_session(self) -> None:
+        websockets = _load_websockets()
+        async with websockets.connect(self.websocket_url) as connection:
+            await self._auth_and_subscribe(connection)
+            self._sub_active = True
+            try:
+                while not self._sub_stop.is_set():
+                    raw = await connection.recv()
+                    self._handle_event_message(raw)
+            finally:
+                self._sub_active = False
+
+    async def _auth_and_subscribe(self, connection: Any) -> None:
+        """The HA WebSocket handshake: auth_required -> auth -> auth_ok,
+        then subscribe to state_changed and consume the result."""
+        greeting = self._decode_ws_message(await connection.recv())
+        if greeting.get("type") != "auth_required":
+            raise HomeAssistantConnectionError(
+                "Home Assistant WebSocket sent an unexpected first "
+                f"message (type={greeting.get('type')!r}); expected "
+                "'auth_required'."
+            )
+        await connection.send(json.dumps(
+            {"type": "auth", "access_token": self.token}))
+        reply = self._decode_ws_message(await connection.recv())
+        if reply.get("type") == "auth_invalid":
+            raise _SubscriptionAuthFailed(
+                "Home Assistant rejected the access token during the "
+                "WebSocket handshake. Create a new long-lived access "
+                "token in your HA profile and update HA_TOKEN, then "
+                "restart the bridge."
+            )
+        if reply.get("type") != "auth_ok":
+            raise HomeAssistantConnectionError(
+                "Home Assistant WebSocket authentication failed with an "
+                f"unexpected reply (type={reply.get('type')!r})."
+            )
+        await connection.send(json.dumps({
+            "id": 1, "type": "subscribe_events",
+            "event_type": "state_changed",
+        }))
+        result = self._decode_ws_message(await connection.recv())
+        if result.get("type") == "result" and result.get("success") is False:
+            raise HomeAssistantConnectionError(
+                "Home Assistant refused the state_changed event "
+                "subscription."
+            )
+
+    @staticmethod
+    def _decode_ws_message(raw: Any) -> dict[str, Any]:
+        """Parse one WebSocket text frame; anything unusable becomes {}."""
+        try:
+            message = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return message if isinstance(message, dict) else {}
+
+    def _handle_event_message(self, raw: Any) -> None:
+        """Turn one WebSocket message into a callback call, or ignore it.
+
+        Only state_changed events with a usable ``new_state`` count; the
+        payload item has the same shape as a REST /api/states entry, so
+        the regular mapping produces the canonical state. Entity removals
+        (``new_state`` null) are skipped - polling covers disappearance.
+        """
+        message = self._decode_ws_message(raw)
+        if message.get("type") != "event":
+            return
+        event = message.get("event")
+        if not isinstance(event, dict) or event.get("event_type") != "state_changed":
+            return
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return
+        entity_id = data.get("entity_id")
+        new_state = data.get("new_state")
+        if not isinstance(entity_id, str) or not isinstance(new_state, dict):
+            return
+        if not self._entity_allowed(entity_id):
+            return
+        device = self._device_from_state(new_state)
+        if device is None:
+            return
+        callback = self._sub_callback
+        if callback is None:
+            return
+        try:
+            callback(device.id, device.state)
+        except Exception:
+            self._sub_callback_errors += 1
 
     def set_property(self, device_id: str, property_name: str, value: Any) -> dict[str, Any]:
         domain = device_id.split(".", 1)[0]

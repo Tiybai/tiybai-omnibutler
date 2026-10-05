@@ -1,0 +1,19 @@
+name: hallway-light-timer
+description: >-
+  Arrival light with an off-timer: when the phone enters the home
+  geofence, turn the light on; five minutes later - a delay action -
+  turn it off again. The actions after the delay do not run until the
+  pause has elapsed, and re-entering restarts the countdown.
+risk: low
+enabled: true
+trigger:
+  type: geofence
+  zone: home
+  transition: enter
+conditions: []
+actions:
+  - device: living_light
+    set: {onoff: true}
+  - delay: 300
+  - device: living_light
+    set: {onoff: false}

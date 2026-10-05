@@ -27,6 +27,9 @@ OP_ALIASES = {
     "greater_than": ">", "gt": ">", "less_than": "<", "lt": "<",
     "at_least": ">=", "gte": ">=", "at_most": "<=", "lte": "<=",
 }
+#: Longest pause a scene action list may ask for, in seconds (24 hours).
+#: Anything longer belongs in a schedule trigger, not an in-scene delay.
+MAX_DELAY_SECONDS = 86400.0
 
 
 @dataclass
@@ -86,10 +89,26 @@ class SceneAction:
 
 
 @dataclass
+class SceneDelay:
+    """A pause inside a scene's action list (``- delay: <seconds>``).
+
+    Actions before the pause run immediately; actions after it run only
+    once the pause has elapsed - the engine parks them as a pending
+    segment and the daemon's tick runs them when they come due (see
+    :meth:`SceneEngine.process_due`). A delay is not a device action:
+    it never reaches a driver, carries no risk, and nothing ever sleeps
+    on it.
+    """
+
+    seconds: float
+
+
+@dataclass
 class Scene:
     name: str
     trigger: SceneTrigger
-    actions: list[SceneAction]
+    # Device actions interleaved with SceneDelay pauses, in file order.
+    actions: list[SceneAction | SceneDelay]
     conditions: list[SceneCondition] = field(default_factory=list)
     risk: RiskLevel = RiskLevel.LOW
     enabled: bool = True

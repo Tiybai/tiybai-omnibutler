@@ -13,6 +13,9 @@ Examples:
     tob mcp --http              serve MCP over HTTP (token auth, remote agents)
     tob run                     run the butler daemon (schedule + state polling)
     tob doctor                  health-check drivers, credentials and scenes
+    tob audit                   show recent audit log entries
+    tob backup                  pack config + state into one .tar.gz
+    tob restore <file>          restore config + state from a backup
     tob setup miio              plain-language guide to getting a device key
     tob pending                 list high-risk actions waiting for a human (host only)
     tob approvals               serve the approvals web page (human clicks, host only)
@@ -36,7 +39,7 @@ from omnibutler.drivers.homeassistant import HomeAssistantDriver
 from omnibutler.drivers.miio import MiioDriver
 from omnibutler.drivers.mock import MockDriver
 from omnibutler.drivers.tuya import TuyaDriver
-from omnibutler.runtime import DEFAULT_SCENES_DIR, build_runtime
+from omnibutler.runtime import DEFAULT_SCENES_DIR, build_runtime, driver_names
 from omnibutler.scenes.loader import SceneValidationError, load_scenes_dir
 
 
@@ -289,6 +292,90 @@ def cmd_doctor(args) -> int:
     results = check_all(runtime)
     print(format_report(results))
     return 1 if any(r.status == "fail" for r in results) else 0
+
+
+def _format_audit_entry(entry: dict) -> str:
+    when = str(entry.get("time") or "")
+    agent = str(entry.get("agent") or "-")
+    device = str(entry.get("device") or "-")
+    action = str(entry.get("action") or "-")
+    status = "ok" if entry.get("ok", True) else "FAILED"
+    line = f"{when}  {agent:<12} {device:<18} {action:<26} {status}"
+    params = entry.get("params") or {}
+    if params:
+        line += f"  {json.dumps(params, ensure_ascii=False, default=str)}"
+    if entry.get("error"):
+        line += f"  error={entry['error']}"
+    return line
+
+
+def cmd_audit(args) -> int:
+    from omnibutler.core.audit import AuditLog
+
+    if args.last < 1:
+        print("--last must be at least 1", file=sys.stderr)
+        return 1
+    log = AuditLog(path=args.audit) if args.audit else AuditLog()
+    if not log.path.exists():
+        print(f"(no audit log yet at {log.path})")
+        return 0
+    entries = log.read_all()  # spans the rotated backups, oldest first
+    total = len(entries)
+    if args.device:
+        entries = [e for e in entries if e.get("device") == args.device]
+    if args.action:
+        entries = [e for e in entries if e.get("action") == args.action]
+    shown = entries[-args.last:]
+    if not shown:
+        print("(audit log is empty)" if total == 0
+              else f"(no audit entries match; the log holds {total})")
+        return 0
+    for entry in shown:
+        print(_format_audit_entry(entry))
+    if len(shown) < len(entries) or len(entries) < total:
+        print(f"({len(shown)} shown of {len(entries)} matching, "
+              f"{total} total; raise --last to see more)")
+    return 0
+
+
+def cmd_backup(args) -> int:
+    from omnibutler.backup import create_backup
+    from omnibutler.config import default_config_path
+    from omnibutler.core.confirmations import default_state_dir
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = (Path(args.path) if args.path
+            else Path.cwd() / f"omnibutler-backup-{stamp}.tar.gz")
+    if dest.is_dir():
+        dest = dest / f"omnibutler-backup-{stamp}.tar.gz"
+    manifest = create_backup(dest, default_config_path(), default_state_dir())
+    print(f"backup written to {dest}:")
+    for name, size in manifest:
+        print(f"  {name} ({size} bytes)")
+    print(f"{len(manifest)} file(s), "
+          f"{sum(size for _name, size in manifest)} bytes total")
+    print("warning: the backup includes your config file, which can "
+          "contain device keys and other secrets - keep the file "
+          "somewhere private.")
+    return 0
+
+
+def cmd_restore(args) -> int:
+    from omnibutler.backup import restore_backup
+    from omnibutler.config import default_config_path
+    from omnibutler.core.confirmations import default_state_dir
+
+    config_path = default_config_path()
+    state_dir = default_state_dir()
+    report = restore_backup(Path(args.path), config_path, state_dir)
+    for kept in report["preserved"]:
+        print(f"previous state kept at {kept}")
+    print(f"restored {len(report['restored'])} file(s) from {args.path}:")
+    for name in report["restored"]:
+        target = (config_path if name == "config.json"
+                  else state_dir / name.removeprefix("state/"))
+        print(f"  {name} -> {target}")
+    return 0
 
 
 def cmd_gateway(args) -> int:
@@ -553,11 +640,7 @@ def cmd_reject(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tob", description="Tiybai OmniButler CLI")
     parser.add_argument("--version", action="version", version=f"tob {__version__}")
-    parser.add_argument("--driver", choices=["mock", "homeassistant", "miio",
-                                             "tuya", "tuya_cloud", "xiaomi_cloud",
-                                             "broadlink",
-                                             "midea", "matter", "zigbee2mqtt",
-                                             "terminal_mock", "all"],
+    parser.add_argument("--driver", choices=[*driver_names(), "all"],
                         default=None,
                         help="device driver set (default: mock, or $TOB_DRIVER)")
     parser.add_argument("--audit", default=None,
@@ -630,6 +713,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="health-check drivers, credentials and scenes")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("audit", help="show recent audit log entries")
+    p.add_argument("--last", type=int, default=20,
+                   help="how many entries to show (default 20)")
+    p.add_argument("--device", default=None,
+                   help="only entries for this device id")
+    p.add_argument("--action", default=None,
+                   help="only entries with this action (e.g. set_property)")
+    p.set_defaults(func=cmd_audit)
+
+    p = sub.add_parser("backup",
+                       help="pack config + state into one .tar.gz "
+                            "(the config can contain secrets - keep "
+                            "the backup private)",
+                       description="Pack the config file and the state "
+                                   "directory into one .tar.gz. The "
+                                   "config can contain device keys and "
+                                   "other secrets - keep the backup "
+                                   "somewhere private.")
+    p.add_argument("path", nargs="?", default=None,
+                   help="output file (default: ./omnibutler-backup-<date>.tar.gz)")
+    p.set_defaults(func=cmd_backup)
+
+    p = sub.add_parser("restore",
+                       help="restore config + state from a backup .tar.gz "
+                            "(current state is kept aside as .bak)")
+    p.add_argument("path", help="backup file to restore from")
+    p.set_defaults(func=cmd_restore)
 
     p = sub.add_parser("setup", help="plain-language guide to getting a device key")
     p.add_argument("brand", choices=["miio", "xiaomi", "tuya", "ha", "homeassistant"])

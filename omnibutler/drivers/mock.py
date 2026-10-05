@@ -76,6 +76,16 @@ def _catalogue() -> list[Device]:
             actions=["turn_on", "turn_off", "toggle"],
         ),
         Device(
+            id="living_room_vacuum", name="Living Room Vacuum", driver="mock",
+            room="living_room", brand="Demo", model="Virtual Robot Vacuum",
+            properties={
+                "onoff": P(Cap.ONOFF),
+                "battery": P(Cap.BATTERY),
+            },
+            state={"onoff": False, "battery": 86},
+            actions=["turn_on", "turn_off"],
+        ),
+        Device(
             id="bedroom_curtain", name="Bedroom Curtain", driver="mock",
             room="bedroom", brand="Demo", model="Virtual Curtain Motor",
             properties={

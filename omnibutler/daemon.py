@@ -10,6 +10,10 @@ This module is that something for a long-running bridge:
   states are re-read and diffed against the previous snapshot; any change
   becomes a ``state_change`` event for the engine. A driver that errors is
   logged to the audit log and skipped - the daemon keeps running.
+* **Delayed actions** - every tick the engine is asked to run any scene
+  actions whose ``delay`` pause has elapsed (see
+  :meth:`SceneEngine.process_due`); nothing ever sleeps on a delay, the
+  tick simply finds them due.
 
 Safety is unchanged: the daemon only ever *feeds events* to the engine, so
 high-risk actions still land in the confirmation queue (never executed
@@ -37,9 +41,12 @@ import threading
 import time
 from collections.abc import Callable
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
+from omnibutler.core.confirmations import default_state_dir
 from omnibutler.core.events import Event
+from omnibutler.instance_lock import InstanceLock
 
 AGENT = "daemon"
 
@@ -101,7 +108,21 @@ class Daemon:
         # duplicate phone buzz after a restart beats a high-risk action
         # sitting in the queue unannounced.
         self._notified_approvals: set[str] = set()
+        # Single-instance lock (see instance_lock): one daemon per
+        # state directory, or two loops would double-fire scenes. The
+        # directory is the one the confirmation queue actually uses;
+        # runtimes without a queue path fall back to the default.
+        queue_path = getattr(getattr(runtime, "confirmations", None),
+                             "path", None)
+        self._state_dir = (Path(queue_path).parent if queue_path
+                           else default_state_dir())
+        self._instance_lock: InstanceLock | None = None
 
+        # Drivers with a live event feed (today: Home Assistant's
+        # WebSocket subscription), started/stopped with the loop. Their
+        # callbacks funnel into _diff_state - the same snapshot diff the
+        # poller uses - so a change seen by both paths still fires once.
+        self._event_drivers: list = []
         self._stop = threading.Event()
         self._last_minute_key: str | None = None
         # (scene name, "YYYY-MM-DD HH:MM") pairs already fired - the dedupe
@@ -118,6 +139,7 @@ class Daemon:
             "gateway_events": 0,
             "gateway_errors": 0,
             "webhook_notifications": 0,
+            "delayed_actions": 0,
         }
 
     # -- control ---------------------------------------------------------
@@ -131,6 +153,12 @@ class Daemon:
 
     # -- main loop ---------------------------------------------------------
     def run(self, max_ticks: int | None = None) -> dict[str, int]:
+        lock = InstanceLock(self._state_dir)
+        # Refuses (DaemonAlreadyRunning, a RuntimeError naming the
+        # holder's pid) when a live daemon already owns this state
+        # directory; takes over a stale lock with a note on stderr.
+        lock.acquire()
+        self._instance_lock = lock
         previous_handlers = self._install_signal_handlers()
         self.audit.record(
             AGENT, "daemon", "daemon:start",
@@ -146,6 +174,7 @@ class Daemon:
                 self._maybe_fire_schedule(now)
                 self._maybe_poll(now)
                 self._maybe_notify_approvals()
+                self._maybe_process_delayed()
                 self.stats["ticks"] += 1
                 if max_ticks is not None and self.stats["ticks"] >= max_ticks:
                     break
@@ -159,10 +188,13 @@ class Daemon:
                 AGENT, "daemon", "daemon:stop", {},
                 result=dict(self.stats), ok=True,
             )
+            lock.release()
+            self._instance_lock = None
         return dict(self.stats)
 
     # -- human-approval extras (approvals web page / macOS dialogs) ----------
     def _start_extras(self) -> None:
+        self._start_event_subscriptions()
         self._start_gateway_extra()
         self._start_webhook_extra()
         confirmations = self.runtime.confirmations
@@ -210,6 +242,41 @@ class Daemon:
                 self.audit.record(
                     AGENT, "daemon", "daemon:notify_started", {}, ok=True,
                 )
+
+    # -- driver event subscriptions (near-real-time state feeds) -------------
+    def _start_event_subscriptions(self) -> None:
+        """Start live state feeds on the drivers that offer one.
+
+        Duck-typed on purpose: only the Home Assistant driver has
+        ``start_event_subscription`` today. A driver whose feed cannot
+        start (library missing, feed switched off) answers False and the
+        poll simply remains the only state source - no error, no fuss.
+        Started drivers are remembered so _stop_extras can shut their
+        feeds down with the loop.
+        """
+        for name, driver in self.manager.drivers.items():
+            starter = getattr(driver, "start_event_subscription", None)
+            if starter is None:
+                continue
+            try:
+                started = starter(self._on_driver_state)
+            except Exception:
+                started = False  # a feed that fails must not kill the daemon
+            if started:
+                self._event_drivers.append(driver)
+                self.audit.record(
+                    AGENT, name, "daemon:event_feed_started", {}, ok=True,
+                )
+
+    def _on_driver_state(self, device_id: str, state: dict[str, Any]) -> None:
+        """One pushed state update from a driver's live feed.
+
+        Goes through the exact snapshot diff the poller uses: whichever
+        path sees a change first updates the snapshot, so the other path
+        diffs against the new values and stays silent - a change seen by
+        both the feed and the next poll still fires only one event.
+        """
+        self._diff_state(device_id, state)
 
     # -- approval webhook extra ------------------------------------------------
     def _start_webhook_extra(self) -> None:
@@ -311,6 +378,10 @@ class Daemon:
         )
 
     def _stop_extras(self) -> None:
+        for driver in self._event_drivers:
+            with contextlib.suppress(Exception):
+                driver.stop_event_subscription()
+        self._event_drivers = []
         if self._gateway_httpd is not None:
             self._gateway_httpd.shutdown()
             self._gateway_httpd.server_close()
@@ -352,6 +423,39 @@ class Daemon:
         self.stats["schedule_events"] += 1
         for name in report.evaluated:
             self._fired.add((name, minute_key))
+
+    # -- delayed scene actions -------------------------------------------------
+    def _maybe_process_delayed(self) -> None:
+        """Run delayed scene actions whose pause has elapsed.
+
+        Runs every tick and is a cheap no-op while nothing is pending.
+        The outcomes are audited like a dispatched event's; a failure is
+        counted and logged, never raised into the loop.
+        """
+        try:
+            report = self.engine.process_due()
+        except Exception as exc:
+            self.stats["errors"] += 1
+            self.audit.record(
+                AGENT, "daemon", "daemon:delayed_error", {},
+                ok=False, error=str(exc),
+            )
+            return
+        if not report.outcomes:
+            return
+        self.stats["delayed_actions"] += len(report.outcomes)
+        self.audit.record(
+            AGENT, "daemon", "daemon:delayed",
+            {"event": "delay"},
+            result={
+                "scenes": sorted({o.scene for o in report.outcomes}),
+                "executed": len(report.executed),
+                "queued": len(report.queued),
+                "failed": len([o for o in report.outcomes
+                               if o.status == "failed"]),
+            },
+            ok=True,
+        )
 
     # -- state polling -------------------------------------------------------
     def _maybe_poll(self, now: datetime.datetime) -> None:

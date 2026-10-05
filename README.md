@@ -64,7 +64,7 @@ git clone https://github.com/Tiybai/tiybai-omnibutler.git
 cd tiybai-omnibutler
 pip install -e .
 
-tob devices                 # a virtual home: 2 ACs, purifier, light, curtain, scale, garage door
+tob devices                 # a virtual home: 2 ACs, purifier, light, curtain, scale, garage door, robot vacuum
 tob devices --state         # ... with live state
 tob set living_ac onoff true
 tob set living_ac target_temperature 24
@@ -128,7 +128,9 @@ once (with your own account, only when no captcha/2FA blocks it), and
 `tob gateway` accepts phone data streams and geofence events;
 `tob streams` shows what the phone has sent, `tob discover` lists what
 each driver can see on the network, and `tob state` prints one
-device's full current state.
+device's full current state. Day to day, `tob audit` reads the audit
+log back, and `tob backup` / `tob restore` pack config and state into
+one file for moving the butler to another machine.
 
 High-risk devices (the garage door in the demo home) refuse direct tool
 calls by design. Try it: ask the agent to open the garage door, then run a
@@ -149,7 +151,20 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.8 (this release) - robot vacuums join the Xiaomi local driver
+v0.9 (this release) - the final sweep: scenes gain delayed actions
+(`- delay: 300` - a light that turns itself off, a vacuum that starts
+once you have left); the Home Assistant driver subscribes to HA's
+event stream, so state changes reach scenes near-instantly instead of
+on the 30-second poll; third-party drivers can ship as pip packages
+(entry point group `omnibutler.drivers`), no fork needed; `tob audit`
+and `tob backup` / `tob restore` cover the operator chores; the
+daemon refuses to start twice against the same state directory; CI
+adds a coverage floor (80%, currently 87%) and Python 3.13 to the
+test matrix; device-data reaches 20 profiles and the demo home gains
+a robot vacuum. Real-hardware verification moves to v0.10 - it still
+needs owners of real devices (issues #2 and #4).
+
+v0.8 - robot vacuums join the Xiaomi local driver
 (start / stop / return to dock, battery level) through the standard
 MIOT vacuum service, and the Xiaomi cloud fallback inherits the new
 family automatically; a queued high-risk action can now push a
@@ -217,7 +232,10 @@ biggest gap** (issues #2 and #4).
 - [x] v0.8 - Xiaomi robot vacuums; webhook notification when a
       high-risk action queues; scene schedules accept `days`;
       ruff + mypy gates in CI
-- [ ] v0.9 - real-hardware verification round (needs owners of real
+- [x] v0.9 - delayed scene actions; HA event-stream subscription;
+      third-party drivers via entry points; audit / backup commands;
+      daemon single-instance lock; coverage gate in CI
+- [ ] v0.10 - real-hardware verification round (needs owners of real
       devices - see issues #2 and #4)
 - [ ] Later - PyPI release (needs the maintainer's PyPI account)
 

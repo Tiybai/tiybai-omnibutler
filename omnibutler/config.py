@@ -300,15 +300,21 @@ def ha_settings(
 ) -> dict[str, Any]:
     """Effective Home Assistant settings: config section over env vars.
 
-    Returns ``{"url", "token", "token_description"}`` where ``token`` is
-    the resolved secret (or None) and ``token_description`` is the
-    log-safe form from :func:`describe_secret`. The ``ha`` section may
+    Returns ``{"url", "token", "token_description", "subscribe_events"}``
+    where ``token`` is the resolved secret (or None),
+    ``token_description`` is the log-safe form from
+    :func:`describe_secret`, and ``subscribe_events`` is the ``ha``
+    section's boolean of that name (None when unset - the HA driver then
+    applies its own default and the OMNIBUTLER_HA_NO_SUBSCRIBE kill
+    switch). The ``ha`` section may
     carry ``url``, ``token`` (literal or ``env:`` ref) and ``token_env``
     (plain name of an environment variable holding the token). With no
     config section, HA_URL / HA_TOKEN apply, exactly like the driver.
     """
     environ = os.environ if environ is None else environ
     section = get_section(config, "ha")
+    subscribe = section.get("subscribe_events")
+    subscribe_events = subscribe if isinstance(subscribe, bool) else None
     url = str(section.get("url") or environ.get("HA_URL", "")).strip().rstrip("/")
     token_field: Any = section.get("token")
     if token_field is None and section.get("token_env"):
@@ -321,11 +327,13 @@ def ha_settings(
             "url": url or None,
             "token": env_token or None,
             "token_description": "env:HA_TOKEN (set)" if env_token else "not set",
+            "subscribe_events": subscribe_events,
         }
     return {
         "url": url or None,
         "token": resolve_secret(token_field, environ=environ),
         "token_description": describe_secret(token_field, environ=environ),
+        "subscribe_events": subscribe_events,
     }
 
 
