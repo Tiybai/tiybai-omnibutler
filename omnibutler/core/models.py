@@ -70,6 +70,7 @@ class Capability(str, enum.Enum):
     ENERGY = "energy"                            # kWh, read-only
     LOCKED = "locked"                            # bool, high risk when writable
     RUNNING = "running"                          # bool, appliance is mid-cycle
+    MICROPHONE = "microphone"                    # bool, terminal mic present, read-only
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,7 @@ CAPABILITY_SPECS: dict[Capability, CapabilitySpec] = {
     Capability.ENERGY: CapabilitySpec("number", writable=False, unit="kWh", minimum=0),
     Capability.LOCKED: CapabilitySpec("bool"),
     Capability.RUNNING: CapabilitySpec("bool", writable=False),
+    Capability.MICROPHONE: CapabilitySpec("bool", writable=False),
 }
 
 

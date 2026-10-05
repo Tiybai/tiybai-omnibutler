@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tiybai-omnibutler"
-version = "0.3.1"
+version = "0.4.0"
 description = "Tiybai OmniButler - an open smart-device bridge that lets AI agents (Muse, OpenClaw, Hermes) control smart devices via MCP."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -13,7 +13,10 @@ authors = [{ name = "Tiybai OmniButler Contributors" }]
 keywords = ["smart-home", "iot", "mcp", "home-assistant", "ai-agent"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -22,10 +25,19 @@ classifiers = [
 dependencies = ["PyYAML>=6.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "cryptography>=41.0"]
+miio = ["cryptography>=41.0"]
 tuya = ["tinytuya>=1.13"]
 broadlink = ["python-broadlink"]
 midea = ["msmart-ng"]
+matter = ["websockets>=12.0"]
+zigbee = ["paho-mqtt>=1.6"]
+
+[project.urls]
+Homepage = "https://github.com/Tiybai/tiybai-omnibutler"
+Repository = "https://github.com/Tiybai/tiybai-omnibutler"
+Issues = "https://github.com/Tiybai/tiybai-omnibutler/issues"
+Changelog = "https://github.com/Tiybai/tiybai-omnibutler/releases"
 
 [project.scripts]
 tob = "omnibutler.cli:main"

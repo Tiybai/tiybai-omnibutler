@@ -285,6 +285,119 @@ def cmd_doctor(args) -> int:
     return 1 if any(r.status == "fail" for r in results) else 0
 
 
+def cmd_gateway(args) -> int:
+    runtime = build_runtime(driver=args.driver, audit_path=args.audit)
+    from omnibutler.gateway import serve
+
+    print(f"phone gateway on {args.host}:{args.port} "
+          f"(token from $OMNIBUTLER_GATEWAY_TOKEN required)")
+    serve(runtime.bus, runtime.streams, host=args.host, port=args.port)
+    return 0
+
+
+def cmd_onboard(args) -> int:
+    import os
+
+    from omnibutler.onboard import config_draft, format_report, scan
+    from omnibutler.runtime import _build_drivers
+
+    drivers = {"mock": MockDriver()}
+    drivers.update(_build_drivers("all"))
+    found = scan(drivers)
+    print(format_report(found))
+    if args.write_draft:
+        path = Path(os.path.expanduser(args.write_draft))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(config_draft(found), ensure_ascii=False,
+                                   indent=2), encoding="utf-8")
+        print(f"\nconfig draft written to {path} "
+              f"(fill in the env: values, then copy what you need into "
+              f"~/.omnibutler/config.json)")
+    return 0
+
+
+def _merge_config_devices(section: str, entries: list[dict]) -> Path:
+    import os
+
+    config_path = Path(os.environ.get(
+        "OMNIBUTLER_CONFIG", str(Path.home() / ".omnibutler" / "config.json")))
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {}
+    if config_path.exists():
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    section_data = data.setdefault(section, {})
+    devices = section_data.setdefault("devices", [])
+    by_key = {d.get("host") or d.get("device_id"): i
+              for i, d in enumerate(devices) if isinstance(d, dict)}
+    for entry in entries:
+        key = entry.get("host") or entry.get("device_id")
+        if key in by_key:
+            devices[by_key[key]].update(entry)
+        else:
+            devices.append(entry)
+    tmp = config_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(config_path)
+    return config_path
+
+
+def cmd_fetch_keys(args) -> int:
+    import getpass
+    import os
+
+    from omnibutler.cloud_keys import CloudKeyError, fetch_tuya_local_keys, \
+        fetch_xiaomi_tokens
+
+    try:
+        if args.brand == "xiaomi":
+            username = os.environ.get("XIAOMI_USERNAME") or input(
+                "Xiaomi account (email/phone): ").strip()
+            password = os.environ.get("XIAOMI_PASSWORD") or getpass.getpass("Xiaomi password (hidden): ")
+            devices = fetch_xiaomi_tokens(username, password)
+            if not devices:
+                print("no devices with a local token were returned")
+                return 0
+            for d in devices:
+                print(f"  {d['name']} ({d['model']}) ip={d['ip']} "
+                      f"token=...{d['token'][-4:]}")
+            if args.store:
+                entries = [{"id": d["did"], "name": d["name"],
+                            "host": d["ip"], "token": d["token"]}
+                           for d in devices]
+                path = _merge_config_devices("miio", entries)
+                print(f"stored {len(entries)} device(s) in {path} (0600)")
+            else:
+                print("re-run with --store to save them into the local config")
+            return 0
+        # tuya
+        access_id = os.environ.get("TUYA_ACCESS_ID") or \
+            input("Tuya IoT access ID: ").strip()
+        access_secret = os.environ.get("TUYA_ACCESS_SECRET") or getpass.getpass("Tuya access secret (hidden): ")
+        uid = os.environ.get("TUYA_UID") or input("Tuya user UID: ").strip()
+        devices = fetch_tuya_local_keys(access_id, access_secret, uid)
+        if not devices:
+            print("no devices with a local_key were returned")
+            return 0
+        for d in devices:
+            print(f"  {d['name']} id={d['device_id']} "
+                  f"local_key=...{d['local_key'][-4:]}")
+        if args.store:
+            entries = [{"id": d["device_id"], "name": d["name"],
+                        "device_id": d["device_id"], "ip": "",
+                        "local_key": d["local_key"]} for d in devices]
+            path = _merge_config_devices("tuya", entries)
+            print(f"stored {len(entries)} device(s) in {path} (0600); "
+                  f"fill each device's LAN ip before use")
+        else:
+            print("re-run with --store to save them into the local config")
+        return 0
+    except CloudKeyError as exc:
+        print(f"error ({exc.kind}): {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_setup(args) -> int:
     from omnibutler.setup_guide import guide_text
 
@@ -406,7 +519,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tob", description="Tiybai OmniButler CLI")
     parser.add_argument("--version", action="version", version=f"tob {__version__}")
     parser.add_argument("--driver", choices=["mock", "homeassistant", "miio",
-                                             "tuya", "broadlink", "midea", "all"],
+                                             "tuya", "broadlink", "midea",
+                                             "matter", "zigbee2mqtt",
+                                             "terminal_mock", "all"],
                         default=None,
                         help="device driver set (default: mock, or $TOB_DRIVER)")
     parser.add_argument("--audit", default=None,
@@ -478,6 +593,22 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("setup-secret", help="store a device key in the local config (hidden input)")
     p.add_argument("key_path", help="dotted path, e.g. miio.devices.0.token")
     p.set_defaults(func=cmd_setup_secret)
+
+    p = sub.add_parser("gateway", help="run the phone gateway (data ingest + geofence events)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8767)
+    p.set_defaults(func=cmd_gateway)
+
+    p = sub.add_parser("onboard", help="scan all drivers and report what each found device still needs")
+    p.add_argument("--write-draft", default=None, metavar="PATH",
+                   help="also write a config draft JSON to PATH")
+    p.set_defaults(func=cmd_onboard)
+
+    p = sub.add_parser("fetch-keys", help="fetch device keys from the vendor cloud once (Xiaomi tokens / Tuya local_keys)")
+    p.add_argument("brand", choices=["xiaomi", "tuya"])
+    p.add_argument("--store", action="store_true",
+                   help="merge the fetched keys into the local config (0600)")
+    p.set_defaults(func=cmd_fetch_keys)
 
     p = sub.add_parser("pending", help="list high-risk actions awaiting a human (host only)")
     p.set_defaults(func=cmd_pending)

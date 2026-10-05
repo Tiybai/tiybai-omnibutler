@@ -1,0 +1,18 @@
+name: leave-home-check
+description: When the phone leaves the home geofence, turn everything off and report anything that was left on.
+risk: low
+enabled: true
+trigger:
+  type: geofence
+  zone: home
+  transition: exit
+conditions: []
+actions:
+  - device: living_ac
+    set: {onoff: false}
+  - device: bedroom_ac
+    set: {onoff: false}
+  - device: air_purifier
+    set: {onoff: false}
+  - device: living_light
+    set: {onoff: false}

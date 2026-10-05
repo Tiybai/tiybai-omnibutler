@@ -140,7 +140,8 @@ class SceneEngine:
         return scene
 
     def attach(self, bus) -> None:
-        for event_type in ("state_change", "schedule", "geofence"):
+        for event_type in ("state_change", "schedule", "geofence",
+                           "session_opened", "session_closed"):
             bus.subscribe(event_type, self.handle_event)
 
     # -- matching ---------------------------------------------------------
@@ -163,6 +164,10 @@ class SceneEngine:
             if event.get("device") != trigger.device:
                 return False
             if trigger.property and event.get("property") != trigger.property:
+                return False
+            return True
+        if trigger.type in ("session_opened", "session_closed"):
+            if trigger.device and event.get("device") != trigger.device:
                 return False
             return True
         return False

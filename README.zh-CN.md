@@ -33,7 +33,8 @@ English version: [README.md](README.md)
 ```
  AI Agent (MCP) → mcp_server → 场景引擎 → core（能力模型/注册表/事件/审计/路由）
                                               │
-                       驱动：mock | homeassistant |（miio、tuya 规划中）
+                       驱动：mock | homeassistant | miio | tuya | 美的 |
+                             broadlink | matter | zigbee2mqtt | 终端（眼镜演示）
                                               │
                        device-data（按型号的事实数据）
 ```
@@ -102,6 +103,10 @@ tob mcp        # 在 stdio 上提供 MCP 服务
 
 常驻运行用 `tob run`（定时触发 + 设备状态轮询）；接真设备前先跑
 `tob doctor` 体检，取钥匙的方法看 `tob setup miio` / `tob setup tuya`。
+v0.4 新增：`tob onboard` 一次扫遍所有驱动、用大白话说清每台设备还缺
+什么；`tob fetch-keys xiaomi|tuya` 用你自己的账号过云一次把本地钥匙
+取回来（撞验证码/两步验证会明确停下，不硬闯）；`tob gateway` 接收
+手机上报的数据流和到家/离家地理围栏事件。
 
 高风险设备（演示家里的车库门）按设计拒绝工具直控。可以试一下：让 Agent
 开车库门会被拒绝；再用场景请求开门（`examples/scenes/garage-arrival.yaml`），
@@ -119,20 +124,24 @@ tob mcp        # 在 stdio 上提供 MCP 服务
 
 ## 状态与路线图
 
-v0.3（本版）：安全从"文档承诺"变成"代码强制"——MCP 里没有任何办法批准
-自己排队的动作，批准只能在宿主机终端 `tob confirm <id>`，队列落盘、
-跨进程共享、重启不丢。另外新增：常驻 daemon（`tob run`）、给远程
-Agent 的 HTTP 接入（`tob mcp --http`，必须带令牌）、真验证凭据的
-`tob doctor`、本地配置文件与大白话取钥指南（`tob setup`），以及美的
-（msmart-ng）与 Broadlink（python-broadlink，如实做学码/发码）两个
-驱动。小米/涂鸦/美的/Broadlink 均用假设备测过，**尚待实机验证**。
+v0.4（本版）：桥走出客厅。新增 Matter 驱动（控制器客户端模式：经
+WebSocket 对接在跑的 matterjs-server / python-matter-server，配对码
+只转发给控制器、本地不假装配网）、经 Zigbee2MQTT 的 Zigbee 驱动、
+手机网关（`tob gateway`：带令牌的 HTTP 接口，收健康/位置等只读数据
+流，地理围栏事件可直接触发场景）、穿戴终端会话（演示智能眼镜：AI 能
+在眼镜上显示文字、出声说话，场景可按会话开启/关闭触发）、一次扫遍
+全部驱动的发现纳管（`tob onboard`）与云取钥（`tob fetch-keys`），
+还有分发打包（Docker、launchd/systemd 常驻模板，见 docs/install.md）。
+所有驱动（新旧）都只用假设备测过，**尚待实机验证**——这是项目目前
+最大的缺口，靠 issue #2 / #4 补。
 
 - [x] v0.2 — 按净室规格实现第一批真实本地驱动；开放 device-data 贡献
 - [x] v0.3 — 确认带外化强制执行；daemon；MCP over HTTP；doctor 与
       setup 指南；美的与 Broadlink 驱动
-- [ ] v0.4 — 实机验证轮次；手机网关模式（穿戴 / 健康只读管道）
-- [ ] v0.5 — Matter 控制器；经 MQTT 对接外部 Zigbee2MQTT
-- [ ] 之后 — 开放智能眼镜的终端模式；厂商云兜底通道
+- [x] v0.4 — Matter（控制器客户端）+ Zigbee2MQTT 驱动；手机网关与
+      数据流；终端会话；发现纳管与云取钥；Docker/常驻服务打包
+- [ ] v0.5 — 实机验证轮次（需要有真设备的朋友，见 issue #2 / #4）
+- [ ] 之后 — PyPI 正式发布；无本地通道品类的厂商云兜底控制
 
 ## 贡献设备
 

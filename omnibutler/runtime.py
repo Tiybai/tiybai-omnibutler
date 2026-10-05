@@ -14,17 +14,24 @@ from omnibutler.core.audit import AuditLog
 from omnibutler.core.confirmations import ConfirmationQueue
 from omnibutler.core.events import EventBus
 from omnibutler.core.manager import DeviceManager
+from omnibutler.core.sessions import SessionManager
+from omnibutler.core.streams import StreamStore
 from omnibutler.drivers.broadlink import BroadlinkDriver
 from omnibutler.drivers.homeassistant import HomeAssistantDriver
+from omnibutler.drivers.matter import MatterDriver
 from omnibutler.drivers.midea import MideaDriver
 from omnibutler.drivers.miio import MiioDriver
 from omnibutler.drivers.mock import MockDriver
+from omnibutler.drivers.terminal_mock import TerminalMockDriver
 from omnibutler.drivers.tuya import TuyaDriver
+from omnibutler.drivers.zigbee2mqtt import Zigbee2MqttDriver
 from omnibutler.scenes.engine import SceneEngine
 from omnibutler.scenes.loader import load_scenes_dir
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_SCENES_DIR = PACKAGE_ROOT / "examples" / "scenes"
+_BUNDLED_SCENES = Path(__file__).resolve().parent / "_scenes"
+DEFAULT_SCENES_DIR = (_BUNDLED_SCENES if _BUNDLED_SCENES.is_dir()
+                      else PACKAGE_ROOT / "examples" / "scenes")
 
 
 @dataclass
@@ -34,9 +41,12 @@ class Runtime:
     confirmations: ConfirmationQueue
     bus: EventBus
     driver_name: str
+    sessions: SessionManager | None = None
+    streams: StreamStore | None = None
 
 
-DRIVER_NAMES = ("mock", "homeassistant", "miio", "tuya", "broadlink", "midea")
+DRIVER_NAMES = ("mock", "homeassistant", "miio", "tuya", "broadlink", "midea",
+                "matter", "zigbee2mqtt", "terminal_mock")
 
 
 def _build_drivers(driver: str) -> dict:
@@ -68,6 +78,10 @@ def _build_drivers(driver: str) -> dict:
         "broadlink": lambda: BroadlinkDriver(
             devices=entries("broadlink", "mac")),
         "midea": lambda: MideaDriver(devices=entries("midea", "key")),
+        "matter": lambda: MatterDriver(),
+        "zigbee2mqtt": lambda: Zigbee2MqttDriver(
+            devices=entries("zigbee2mqtt", "friendly_name")),
+        "terminal_mock": lambda: TerminalMockDriver(),
     }
     if driver == "all":
         return {name: build() for name, build in builders.items()}
@@ -98,5 +112,8 @@ def build_runtime(
         if scenes_path.is_dir():
             engine.add_scenes(load_scenes_dir(scenes_path))
     engine.attach(bus)
+    sessions = SessionManager(bus=bus, audit=audit)
+    streams = StreamStore()
     return Runtime(manager=manager, engine=engine, confirmations=confirmations,
-                   bus=bus, driver_name=driver)
+                   bus=bus, driver_name=driver, sessions=sessions,
+                   streams=streams)

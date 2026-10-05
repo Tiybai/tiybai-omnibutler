@@ -180,6 +180,9 @@ class Daemon:
 
     # -- schedule ticks ----------------------------------------------------
     def _maybe_fire_schedule(self, now: datetime.datetime) -> None:
+        sessions = getattr(self.runtime, "sessions", None)
+        if sessions is not None:
+            sessions.expire_idle()
         minute_key = now.strftime("%Y-%m-%d %H:%M")
         if minute_key == self._last_minute_key:
             return

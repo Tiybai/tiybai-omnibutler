@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tiybai OmniButler, macOS per-user LaunchAgent.
+     Keeps the daemon alive in your login session.
+     Install instructions live in packaging/README.md.
+     Note: flag names in this file are arguments, one per string. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tiybai.omnibutler</string>
+
+    <!-- Replace YOURNAME and the venv path with your real install.
+         The notify flag enables macOS dialog popups for pending
+         confirmations; it only works on macOS. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOURNAME/.venv-omnibutler/bin/tob</string>
+        <string>run</string>
+        <string>--notify</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TOB_DRIVER</key>
+        <string>all</string>
+        <!-- If you add an approvals port to ProgramArguments, also add
+             a key OMNIBUTLER_APPROVALS_TOKEN here with a long random
+             string as its value. The daemon refuses to serve the
+             approvals page without that token. -->
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOURNAME</string>
+
+    <!-- Start at login, and restart if the daemon ever exits. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Wait 30s between restarts so a crash loop stays readable. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOURNAME/Library/Logs/omnibutler/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOURNAME/Library/Logs/omnibutler/stderr.log</string>
+</dict>
+</plist>

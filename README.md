@@ -44,7 +44,8 @@ sits in the middle:
                                                       events/audit/manager)
                                                       |
                                     drivers: mock | homeassistant | miio |
-                                             tuya | midea | broadlink
+                                             tuya | midea | broadlink |
+                                             matter | zigbee2mqtt | terminals
                                                       |
                                     device-data (per-model facts)
 ```
@@ -118,7 +119,11 @@ button and silence never means yes.
 Run it as an always-on butler with `tob run` (schedule triggers and
 device-state polling), check a real setup with `tob doctor`, and get
 plain-language help fetching a device key with `tob setup miio` /
-`tob setup tuya`.
+`tob setup tuya`. New in v0.4: `tob onboard` scans every driver and
+says in plain language what each found device still needs,
+`tob fetch-keys xiaomi|tuya` fetches local keys from the vendor cloud
+once (with your own account, only when no captcha/2FA blocks it), and
+`tob gateway` accepts phone data streams and geofence events.
 
 High-risk devices (the garage door in the demo home) refuse direct tool
 calls by design. Try it: ask the agent to open the garage door, then run a
@@ -139,25 +144,32 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.3 (this release) - the safety story is now enforced, not just
-documented: the MCP server has no way to approve its own queued actions
-(approval is a host-terminal-only step, and the queue is persisted on
-disk across processes). Also new: an always-on daemon (`tob run`), an
-HTTP transport for remote agents (`tob mcp --http`, token required),
-`tob doctor` health checks that actually verify credentials, a
-local config file + plain-language key-fetching guides (`tob setup`),
-and Midea (msmart-ng) and Broadlink (python-broadlink, honest
-learn/send IR-RF) drivers. Xiaomi/Tuya/Midea/Broadlink drivers are
-tested against fake devices; **not yet verified on real hardware**.
+v0.4 (this release) - the bridge grows past the living room. New:
+a Matter driver (controller-client mode: it talks to a running
+matterjs-server / python-matter-server over WebSocket; commissioning
+codes are forwarded to the controller, never faked locally), Zigbee
+via Zigbee2MQTT over MQTT, a phone gateway (`tob gateway`: tokened
+HTTP ingest for read-only data streams like health and location,
+plus geofence events that fire scenes), terminal sessions for
+wearables (a smart-glasses demo terminal the AI can speak and display
+through; scenes can trigger on session open/close), one-pass
+discovery (`tob onboard`) and cloud key fetching (`tob fetch-keys`),
+and distribution packaging (Docker, launchd/systemd units - see
+docs/install.md). All drivers, old and new, are tested against fake
+devices; **none are verified on real hardware yet** - that is still
+the project's biggest gap, and issue #4 is where it gets closed.
 
 - [x] v0.2 - first real local drivers behind clean-room specs; device-data
       contributions open
 - [x] v0.3 - human-only confirmations enforced; daemon; MCP over HTTP;
       doctor + setup guides; Midea and Broadlink drivers
-- [ ] v0.4 - real-hardware verification round; phone-gateway mode
-      (wearables / health read-only pipelines)
-- [ ] v0.5 - Matter controller, Zigbee via external Zigbee2MQTT over MQTT
-- [ ] Later - terminal mode for open smart glasses; vendor-cloud fallbacks
+- [x] v0.4 - Matter (controller client) + Zigbee2MQTT drivers; phone
+      gateway + data streams; terminal sessions; onboard scan +
+      cloud key fetch; Docker/service packaging
+- [ ] v0.5 - real-hardware verification round (needs owners of real
+      devices - see issues #2 and #4)
+- [ ] Later - PyPI release; vendor-cloud control fallbacks where no
+      local path exists
 
 ## Contributing a device
 

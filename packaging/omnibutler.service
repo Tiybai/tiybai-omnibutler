@@ -1,0 +1,47 @@
+# Tiybai OmniButler - systemd user unit (Linux)
+#
+# What it does: keeps `tob run` alive in your user session (no root needed).
+# Note: this unit deliberately runs plain `tob run`. The `--notify` flag
+# (macOS dialog popups for pending confirmations) is macOS-only; on Linux
+# approve/reject from the terminal (`tob pending` / `tob confirm <id>`) or
+# enable the approvals web page as shown below.
+#
+# Install:
+#   1. Install the package somewhere stable, e.g.:
+#        python3 -m venv ~/.venv-omnibutler
+#        ~/.venv-omnibutler/bin/pip install /path/to/tiybai-omnibutler
+#   2. Copy this file to ~/.config/systemd/user/omnibutler.service
+#      (the paths below assume the venv above; adjust if yours differs).
+#   3. systemctl --user daemon-reload
+#      systemctl --user enable --now omnibutler.service
+#   4. Follow the logs / check status:
+#        journalctl --user -u omnibutler -f
+#      Health-check on demand any time with: tob doctor
+#   Optional: to keep it running while you are logged out, run once:
+#        loginctl enable-linger $USER
+#
+# Uninstall:
+#   systemctl --user disable --now omnibutler.service
+#   rm ~/.config/systemd/user/omnibutler.service
+
+[Unit]
+Description=Tiybai OmniButler - smart-device bridge daemon
+Documentation=https://github.com/Tiybai/tiybai-omnibutler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust the venv path if you installed elsewhere.
+ExecStart=%h/.venv-omnibutler/bin/tob run
+# To also serve the approvals web page, replace the line above with:
+#   ExecStart=%h/.venv-omnibutler/bin/tob run --approvals-port 8766
+# and uncomment the token below (the daemon refuses to serve the page
+# without it). Keep the page on LAN/VPN only.
+#Environment=OMNIBUTLER_APPROVALS_TOKEN=CHANGE-ME-long-random-string
+Environment=TOB_DRIVER=all
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

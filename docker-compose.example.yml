@@ -1,0 +1,93 @@
+# Tiybai OmniButler - example Docker Compose setup
+#
+# Copy to docker-compose.yml, replace every "CHANGE-ME" value, then:
+#   docker compose up -d --build
+#
+# How configuration flows:
+#   * ./omnibutler-home/ on the host is mounted over ~/.omnibutler in the
+#     container. Put your config.json there (start from config.example.json
+#     in the repo). The same directory holds runtime state - the pending
+#     confirmation queue and the audit log - so approvals survive restarts.
+#   * Secrets stay out of config.json: the config references them as
+#     "env:VARNAME" and the real values are passed below as environment
+#     variables.
+#
+# IMPORTANT - networking: the LAN drivers (Xiaomi miIO, Tuya, Broadlink)
+# talk UDP/broadcast on your home network. With the default bridge
+# networking they cannot reach your devices. On Linux, uncomment
+# `network_mode: host` on the omnibutler service (the `ports:` mapping is
+# then ignored and the services listen on the host directly). Bridge mode
+# is fine for the mock driver and for Home Assistant (plain HTTP).
+
+services:
+  omnibutler:
+    build:
+      context: .
+      args:
+        # Only the brands you own - see the Dockerfile for the full list.
+        EXTRAS: "miio,tuya"
+    image: tiybai-omnibutler
+    container_name: omnibutler
+    restart: unless-stopped
+    # network_mode: host   # <- recommended on Linux for LAN device drivers
+    command:
+      - "run"
+      - "--approvals-port"
+      - "8766"
+      - "--host"
+      - "0.0.0.0"
+    environment:
+      # Which drivers to load: mock | homeassistant | miio | tuya |
+      # broadlink | midea | all
+      TOB_DRIVER: "all"
+      # Required because the approvals page is enabled above. Pick a long
+      # random value; it is the password for the approve/reject web page.
+      OMNIBUTLER_APPROVALS_TOKEN: "CHANGE-ME-approvals-token"
+      # Secrets referenced as env:... from config.json - fill in yours and
+      # delete the ones you do not use.
+      HA_TOKEN: "CHANGE-ME"
+      MIIO_LIVING_AC_TOKEN: "CHANGE-ME"
+      MIIO_PURIFIER_TOKEN: "CHANGE-ME"
+      TUYA_PLUG_LOCAL_KEY: "CHANGE-ME"
+    volumes:
+      - ./omnibutler-home:/home/omnibutler/.omnibutler
+    ports:
+      - "8766:8766" # approvals page (token-protected; LAN/VPN only)
+
+  # Optional: MCP over HTTP, so an AI agent on another machine can connect.
+  # This is a separate process from the daemon. Start it with:
+  #   docker compose --profile mcp up -d
+  # Remote access should go through Cloudflare Access or WireGuard -
+  # do not expose this port raw to the internet.
+  mcp-http:
+    image: tiybai-omnibutler
+    container_name: omnibutler-mcp
+    restart: unless-stopped
+    profiles: ["mcp"]
+    command:
+      - "mcp"
+      - "--http"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8765"
+    environment:
+      TOB_DRIVER: "all"
+      # Required: `tob mcp --http` refuses to start without a token.
+      OMNIBUTLER_HTTP_TOKEN: "CHANGE-ME-http-token"
+      HA_TOKEN: "CHANGE-ME"
+      MIIO_LIVING_AC_TOKEN: "CHANGE-ME"
+      MIIO_PURIFIER_TOKEN: "CHANGE-ME"
+      TUYA_PLUG_LOCAL_KEY: "CHANGE-ME"
+    volumes:
+      - ./omnibutler-home:/home/omnibutler/.omnibutler
+    ports:
+      - "8765:8765"
+
+  # Reserved for the future phone-gateway service (wearables / health data
+  # relay). Not implemented yet - port 8767 is held for it so firewall and
+  # reverse-proxy rules can be written once, now.
+  # gateway:
+  #   image: tiybai-omnibutler
+  #   ports:
+  #     - "8767:8767"

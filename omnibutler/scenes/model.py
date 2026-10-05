@@ -12,7 +12,8 @@ from typing import Any
 
 from omnibutler.core.models import RiskLevel
 
-TRIGGER_TYPES = {"state_change", "schedule", "geofence"}
+TRIGGER_TYPES = {"state_change", "schedule", "geofence",
+                 "session_opened", "session_closed"}
 COMPARISON_OPS = {"==", "!=", ">", "<", ">=", "<=", "in", "truthy", "falsy"}
 CONDITION_TYPES = {"state", "time_window"}
 #: Friendly spellings accepted in scene files for state-condition operators.
