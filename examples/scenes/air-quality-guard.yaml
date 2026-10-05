@@ -1,0 +1,20 @@
+name: air-quality-guard
+description: When the purifier reports PM2.5 above 75, switch it to turbo until the air clears.
+risk: low
+enabled: true
+trigger:
+  type: state_change
+  device: air_purifier
+  property: pm25
+conditions:
+  - device: air_purifier
+    property: pm25
+    op: ">"
+    value: 75
+actions:
+  - device: air_purifier
+    set: {onoff: true}
+  - device: air_purifier
+    set: {mode: turbo}
+  - device: air_purifier
+    set: {fan_speed: 90}

@@ -1,0 +1,21 @@
+name: sleep-mode
+description: At 22:30, switch the bedroom to sleep temperature, close the curtain and quiet the purifier.
+risk: low
+enabled: true
+trigger:
+  type: schedule
+  at: "22:30"
+conditions: []
+actions:
+  - device: bedroom_ac
+    set: {onoff: true}
+  - device: bedroom_ac
+    set: {target_temperature: 27}
+  - device: bedroom_ac
+    set: {fan_speed: 20}
+  - device: bedroom_curtain
+    action: close
+  - device: air_purifier
+    set: {mode: silent}
+  - device: living_light
+    set: {onoff: false}

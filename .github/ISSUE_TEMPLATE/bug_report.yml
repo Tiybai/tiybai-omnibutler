@@ -1,0 +1,42 @@
+name: Bug report
+description: Something in the bridge does not behave as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include tokens, device keys, IP addresses you consider private,
+        or account information in a bug report. Use the mock driver to
+        reproduce whenever possible.
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options: [core, mock driver, homeassistant driver, scene engine, mcp server, cli, docs]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps / commands
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output (redacted)
+      render: shell

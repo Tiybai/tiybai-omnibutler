@@ -1,0 +1,21 @@
+name: garage-arrival
+description: >-
+  When the car/phone reaches the garage gate, open the garage door and turn
+  on the light. The garage-door action is HIGH risk (scene action override
+  and a high-risk device): the scene engine will not open it directly - the
+  action is parked in the confirmation queue until a human approves it,
+  while the low-risk light action still runs. This scene exists to
+  demonstrate that guardrail.
+risk: medium
+enabled: true
+trigger:
+  type: geofence
+  zone: garage_gate
+  transition: enter
+conditions: []
+actions:
+  - device: garage_door
+    action: open
+    risk: high
+  - device: living_light
+    set: {onoff: true}

@@ -1,0 +1,39 @@
+# Licence audit
+
+Own code: **Apache-2.0** (see `LICENSE`, `NOTICE`).
+
+## Direct dependencies
+
+| Dependency | Licence | Use |
+|---|---|---|
+| Python 3.11+ standard library | PSF | runtime |
+| PyYAML >= 6.0 | MIT | scene file parsing (the only runtime dependency) |
+| pytest (dev only) | MIT | tests |
+
+Rule: new direct dependencies must be MIT / Apache-2.0 / BSD / PSF / ISC.
+Anything else needs a maintainer decision recorded in this file first.
+
+## Not dependencies - external systems and references
+
+These projects are **not** imported, vendored, or copied. They run as
+separate processes under their own licences, or serve as specification
+references under the clean-room rules in `clean-room.md`.
+
+| Project | Licence | Relationship |
+|---|---|---|
+| Home Assistant | Apache-2.0 | External system; we call its REST API. HA integrations a user installs are the user's choice. |
+| python-miio | GPL-3.0 | Reference only (protocol facts via spec process); future miIO driver is clean-room or process-isolated - decided per driver before merge. |
+| Zigbee2MQTT | GPL-3.0 | External process; if used, it is reached over MQTT, never linked. |
+| Gadgetbridge | AGPL-3.0 | External Android app; phone-gateway mode talks to it via its public intents/APIs, never merged into this tree. |
+| tuya-local device data | MIT | Data dependency candidate; entries carry their own source/provenance fields (see device-data/README.md). |
+| tinytuya | MIT | Candidate permissive dependency for a future Tuya driver; evaluate at integration time. |
+| msmart-ng | MIT | Candidate permissive dependency for a future Midea driver; evaluate at integration time. |
+| matter.js | Apache-2.0 | Candidate dependency for a future Matter controller; evaluate at integration time. |
+| python-broadlink | MIT | Candidate dependency for infrared fallback; evaluate at integration time. |
+| MentraOS | Apache-2.0 | External glasses OS; terminal mode integrates via its APIs. |
+| LibrePods | GPL-3.0 | Reference / external only. |
+| openScale | GPL-3.0 | Reference / external only. |
+
+Isolation principle: communication with GPL/AGPL components happens through
+public interfaces (REST, MQTT, intents, subprocess boundaries), never by
+copying their code into this repository.

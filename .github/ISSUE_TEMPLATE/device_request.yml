@@ -1,0 +1,53 @@
+name: Device support request
+description: Ask for a device model to be supported (or volunteer to add it)
+labels: ["device-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Device support is added one verified model at a time. The more of the
+        fields below you can fill in, the faster this can move. Do not post
+        device keys, tokens, MAC addresses, or account details.
+  - type: input
+    id: brand_model
+    attributes:
+      label: Brand and exact model
+      placeholder: "e.g. Mijia Air Purifier 4 Lite (AC-M17-SC)"
+    validations:
+      required: true
+  - type: input
+    id: protocol
+    attributes:
+      label: Protocol / ecosystem, if known
+      placeholder: "MiOT (Wi-Fi) / Tuya (Zigbee) / Matter / BLE / unknown"
+    validations:
+      required: true
+  - type: dropdown
+    id: own_device
+    attributes:
+      label: Do you own this device and can you test with it?
+      options:
+        - "Yes, I own it and can test"
+        - "Yes, I own it but cannot test code"
+        - "No, requesting only"
+    validations:
+      required: true
+  - type: textarea
+    id: capabilities
+    attributes:
+      label: What should be controllable / readable?
+      placeholder: "on/off, target temperature, PM2.5 reading, ..."
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Public documentation or spec links (if any)
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you contribute the device-data file or driver?
+      options:
+        - "Yes - data file"
+        - "Yes - data file and driver (I have read docs/clean-room.md)"
+        - "No"

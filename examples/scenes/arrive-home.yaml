@@ -1,0 +1,22 @@
+name: arrive-home
+description: When the phone enters the home geofence, cool the living room and start the purifier.
+risk: low
+enabled: true
+trigger:
+  type: geofence
+  zone: home
+  transition: enter
+conditions:
+  - device: living_ac
+    property: onoff
+    op: "=="
+    value: false
+actions:
+  - device: living_ac
+    set: {onoff: true}
+  - device: living_ac
+    set: {target_temperature: 26}
+  - device: air_purifier
+    set: {onoff: true}
+  - device: air_purifier
+    set: {mode: auto}
