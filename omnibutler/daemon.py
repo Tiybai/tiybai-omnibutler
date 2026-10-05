@@ -8,8 +8,13 @@ This module is that something for a long-running bridge:
   AI agent (or a human running ``tob simulate``) in the loop.
 * **State polling** - every ``poll_interval`` seconds each driver's device
   states are re-read and diffed against the previous snapshot; any change
-  becomes a ``state_change`` event for the engine. A driver that errors is
-  logged to the audit log and skipped - the daemon keeps running.
+  becomes a ``state_change`` event for the engine. A device whose read
+  errors is logged to the audit log and skipped - the rest of its driver
+  still polls, and the daemon keeps running. Drivers are polled in
+  parallel (a bounded thread pool, at most four at once); devices within
+  one driver stay serial, so no driver instance is ever driven from two
+  threads at once - only distinct drivers overlap. Set
+  ``OMNIBUTLER_POLL_SERIAL=1`` to restore the one-driver-at-a-time loop.
 * **Delayed actions** - every tick the engine is asked to run any scene
   actions whose ``delay`` pause has elapsed (see
   :meth:`SceneEngine.process_due`); nothing ever sleeps on a delay, the
@@ -36,10 +41,12 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import os
 import signal
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -130,6 +137,14 @@ class Daemon:
         self._fired: set[tuple[str, str]] = set()
         self._last_poll_at: float | None = None
         self._snapshot: dict[str, dict[str, Any]] = {}
+        # Serializes _diff_state end to end (snapshot read -> compare
+        # -> snapshot update -> stats -> dispatch): the polling loop
+        # and the HA push-callback thread both funnel state through
+        # it, and an interleaved pair could double-fire a change or
+        # lose one. Dispatch happens inside the lock on purpose - the
+        # snapshot must not move again until this change has fully
+        # propagated.
+        self._diff_lock = threading.Lock()
         self.stats: dict[str, int] = {
             "ticks": 0,
             "schedule_events": 0,
@@ -294,7 +309,10 @@ class Daemon:
             return
         if notifier is None:
             return  # unconfigured: the announcement channel is simply off
-        self.webhook_notifier = notifier
+        # Send from a background queue, not the tick: one sleepy push
+        # service must not stall the daemon (see notify_webhook's
+        # AsyncNotifier). Injected notifiers are used as-is, unwrapped.
+        self.webhook_notifier = notify_webhook.AsyncNotifier(notifier)
         # The audit entry names the feature, never the URL: webhook URLs
         # routinely embed a topic or key that acts as a credential.
         self.audit.record(
@@ -378,6 +396,13 @@ class Daemon:
         )
 
     def _stop_extras(self) -> None:
+        # Flush/close the webhook notifier first (it is an AsyncNotifier
+        # when the daemon resolved it itself): a bounded wait, so queued
+        # announcements get their chance without stalling shutdown.
+        close = getattr(self.webhook_notifier, "close", None)
+        if callable(close):
+            with contextlib.suppress(Exception):
+                close()
         for driver in self._event_drivers:
             with contextlib.suppress(Exception):
                 driver.stop_event_subscription()
@@ -464,38 +489,80 @@ class Daemon:
             return
         self._last_poll_at = ts
         self.stats["polls"] += 1
-        for driver_name in list(self.manager.drivers):
+        names = list(self.manager.drivers)
+        serial = os.environ.get("OMNIBUTLER_POLL_SERIAL", "").strip() == "1"
+        if len(names) > 1 and not serial:
+            # Poll drivers in parallel on a bounded pool: with several
+            # slow drivers (each device read is a network round-trip),
+            # a serial loop makes the round as slow as the sum of all
+            # drivers. Devices within a driver are still read serially
+            # by _poll_driver, so no driver instance is ever used
+            # concurrently - only distinct drivers overlap, which the
+            # drivers' thread-safety posture allows.
+            with ThreadPoolExecutor(
+                max_workers=min(4, len(names)),
+                thread_name_prefix="omnibutler-poll",
+            ) as pool:
+                futures = [
+                    pool.submit(self._poll_driver_guarded, name)
+                    for name in names
+                ]
+                for future in futures:
+                    future.result()  # guarded: never raises
+        else:
+            for name in names:
+                self._poll_driver_guarded(name)
+
+    def _poll_driver_guarded(self, driver_name: str) -> None:
+        """_poll_driver plus a last-resort net.
+
+        Per-device read errors are already handled inside _poll_driver;
+        this catches anything unexpected escaping it (a driver whose
+        device listing blows up, say) so one driver can never kill the
+        loop - or, in parallel mode, its fellow drivers' round.
+        """
+        try:
             self._poll_driver(driver_name)
+        except Exception as exc:
+            self.stats["errors"] += 1
+            self.audit.record(
+                AGENT, driver_name, "daemon:poll_error",
+                {"device": "-"}, ok=False, error=str(exc),
+            )
 
     def _poll_driver(self, driver_name: str) -> None:
         devices = [d for d in self.manager.list_devices() if d.driver == driver_name]
         for device in devices:
             try:
                 state = self.manager.get_state(device.id)
-            except Exception as exc:  # a sick driver must not kill the daemon
+            except Exception as exc:  # a sick device must not kill the daemon
                 self.stats["errors"] += 1
                 self.audit.record(
                     AGENT, driver_name, "daemon:poll_error",
                     {"device": device.id}, ok=False, error=str(exc),
                 )
-                return  # skip the rest of this driver until the next poll
+                # Skip just this device. The driver's remaining devices
+                # still get their round - one dead bulb must not blind
+                # the whole driver until the next poll.
+                continue
             self._diff_state(device.id, state)
 
     def _diff_state(self, device_id: str, state: dict[str, Any]) -> None:
-        previous = self._snapshot.get(device_id)
-        self._snapshot[device_id] = dict(state)
-        if previous is None:
-            return  # first sighting is the baseline, not a change
-        for key in sorted(state):
-            if key in previous and previous[key] == state[key]:
-                continue
-            self.stats["state_changes"] += 1
-            event = Event(
-                type="state_change", source=AGENT,
-                data={"device": device_id, "property": key,
-                      "value": state[key], "old_value": previous.get(key)},
-            )
-            self._dispatch(event)
+        with self._diff_lock:
+            previous = self._snapshot.get(device_id)
+            self._snapshot[device_id] = dict(state)
+            if previous is None:
+                return  # first sighting is the baseline, not a change
+            for key in sorted(state):
+                if key in previous and previous[key] == state[key]:
+                    continue
+                self.stats["state_changes"] += 1
+                event = Event(
+                    type="state_change", source=AGENT,
+                    data={"device": device_id, "property": key,
+                          "value": state[key], "old_value": previous.get(key)},
+                )
+                self._dispatch(event)
 
     # -- shared --------------------------------------------------------------
     def _dispatch(self, event: Event):

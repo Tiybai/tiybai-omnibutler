@@ -50,6 +50,7 @@ import base64
 import binascii
 import json
 import os
+import sys
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -220,22 +221,64 @@ class BroadlinkDriver(Driver):
             if self._codes_file.exists():
                 try:
                     parsed = json.loads(self._codes_file.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError) as exc:
+                except OSError as exc:
                     raise DriverNotConfiguredError(
                         f"Cannot read Broadlink codes file "
                         f"{self._codes_file}: {exc}."
                     ) from exc
+                except json.JSONDecodeError:
+                    parsed = None  # handled below, as corruption
                 if isinstance(parsed, dict):
                     self._codes = parsed
+                else:
+                    # Corrupt (or wrong-shaped) file: quarantine it
+                    # and start empty rather than wedging the whole
+                    # driver on data a user can simply relearn.
+                    self._quarantine_corrupt_codes()
         return self._codes
+
+    def _quarantine_corrupt_codes(self) -> None:
+        """Move a corrupt codes file aside; start from an empty table.
+
+        The learned codes are the user's own data, so the bad file is
+        kept for inspection - renamed to ``<name>.corrupt`` (numeric
+        suffix when that name is already taken) - instead of being
+        deleted here or silently overwritten by the next save. The
+        loss is announced loudly on stderr with the path and the
+        disposition; the driver itself stays usable.
+        """
+        target = self._codes_file.with_name(self._codes_file.name + ".corrupt")
+        n = 1
+        while target.exists():
+            target = self._codes_file.with_name(
+                f"{self._codes_file.name}.corrupt.{n}")
+            n += 1
+        try:
+            self._codes_file.replace(target)
+            disposition = f"it was moved to {target} for inspection"
+        except OSError as exc:
+            disposition = (f"moving it aside failed ({exc}); it will be "
+                           "overwritten by the next save")
+        print(
+            f"omnibutler: Broadlink codes file {self._codes_file} is not "
+            f"valid JSON; starting with an empty code table - {disposition}. "
+            "Codes can be relearned with the learn_code action.",
+            file=sys.stderr,
+        )
 
     def _save_codes(self) -> None:
         codes = self._load_codes()
         self._codes_file.parent.mkdir(parents=True, exist_ok=True)
-        self._codes_file.write_text(
-            json.dumps(codes, ensure_ascii=False, indent=1, sort_keys=True),
-            encoding="utf-8",
-        )
+        text = json.dumps(codes, ensure_ascii=False, indent=1, sort_keys=True)
+        # Write-then-replace (the pattern the confirmation queue uses):
+        # a crash mid-write leaves the previous codes file intact
+        # instead of a truncated one the loader would then quarantine.
+        # The tmp name carries the pid so concurrent processes cannot
+        # interleave writes to one shared tmp file.
+        tmp = self._codes_file.with_name(
+            f"{self._codes_file.name}.tmp-{os.getpid()}")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, self._codes_file)
 
     # -- transport ---------------------------------------------------------
     def _connect(self, device_id: str) -> Any:

@@ -32,3 +32,9 @@ vocabulary of `omnibutler/core/models.py`.
    licence is unclear. When in doubt, collect the mapping from your own
    device.
 4. Keys, tokens and account identifiers never belong in data files.
+5. **A profile can be data-only.** If no driver speaks a profile's
+   protocol yet, the profile may still be merged as data reserved for a
+   future driver - but its `provenance.note` must say so plainly
+   (example: `yeelight-led-bulb-1s.json`, whose `yeelight-lan` protocol
+   has no driver yet). A data-only profile describes facts; nothing in
+   the bridge can control that device until a driver lands.

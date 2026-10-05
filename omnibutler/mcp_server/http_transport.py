@@ -24,9 +24,11 @@ bind is 127.0.0.1.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import logging
 import os
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 TOKEN_ENV_VAR = "OMNIBUTLER_HTTP_TOKEN"
 MAX_BODY_BYTES = 1024 * 1024  # 1 MiB: JSON-RPC tool calls are small.
+#: Socket timeout (seconds) for transport connections: a client that
+#: connects and then goes silent must not pin a handler thread forever.
+SOCKET_TIMEOUT = 30.0
 
 
 class HttpTransportError(RuntimeError):
@@ -54,6 +59,44 @@ def _resolve_token(token: str | None) -> str:
     return resolved
 
 
+_LOOPBACK_BINDS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _host_header_allowed(host_header: str | None, bind_host: str) -> bool:
+    """DNS-rebinding guard for the Host header.
+
+    When the server binds a loopback address the check is skipped: only
+    local processes can reach it anyway. When it binds anything else,
+    the Host header must look like this machine: an empty header (an
+    HTTP/1.0-style client cannot be rebinding anyone), ``localhost``,
+    the bind address itself, any IP literal, or the machine's own
+    hostname. A random public name (``evil.example``) is refused - a
+    browser tricked into DNS-rebinding this port would carry exactly
+    that kind of Host. (Same rules as the phone gateway's guard.)
+    """
+    if bind_host in _LOOPBACK_BINDS:
+        return True
+    if host_header is None or not host_header.strip():
+        return True
+    host = host_header.strip()
+    if host.startswith("["):  # [v6 literal]:port
+        end = host.find("]")
+        name = host[1:end] if end != -1 else host
+    else:
+        name = host.split(":", 1)[0]
+    name = name.rstrip(".").lower()
+    if not name:
+        return True
+    if name == "localhost" or name == bind_host.lower():
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    return name == socket.gethostname().lower()
+
+
 def make_handler(server: McpServer, token: str):
     """Build a request-handler class bound to *server* and *token*.
 
@@ -64,6 +107,9 @@ def make_handler(server: McpServer, token: str):
     class McpHttpHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "tiybai-omnibutler-http"
+        # socketserver applies this to every accepted connection: a
+        # client that goes silent must not pin a handler thread forever.
+        timeout = SOCKET_TIMEOUT
 
         # -- plumbing ------------------------------------------------------
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -72,16 +118,30 @@ def make_handler(server: McpServer, token: str):
             # into logs through here.
             logger.debug("%s - %s", self.address_string(), format % args)
 
-        def _send_json(self, status: int, payload: Any) -> None:
+        def _send_json(self, status: int, payload: Any, *,
+                       close: bool = False) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            if close:
+                # The request body was rejected unread (bad or oversized
+                # Content-Length): leftover bytes would corrupt the next
+                # request on this keep-alive connection, so close it.
+                self.send_header("Connection", "close")
+                self.close_connection = True
             self.end_headers()
             self.wfile.write(body)
 
-        def _send_error_json(self, status: int, message: str) -> None:
-            self._send_json(status, {"error": message})
+        def _send_error_json(self, status: int, message: str, *,
+                             close: bool = False) -> None:
+            self._send_json(status, {"error": message}, close=close)
+
+        def _host_allowed(self) -> bool:
+            address = self.server.server_address
+            bind_host = (str(address[0])
+                         if isinstance(address, tuple) else "")
+            return _host_header_allowed(self.headers.get("Host"), bind_host)
 
         def _authorized(self) -> bool:
             header = self.headers.get("Authorization") or ""
@@ -90,6 +150,10 @@ def make_handler(server: McpServer, token: str):
 
         # -- routes ----------------------------------------------------------
         def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
+            if not self._host_allowed():
+                self._send_error_json(
+                    403, "Host header is not allowed for this bind address")
+                return
             if self.path == "/health":
                 self._send_json(200, {"status": "ok"})
                 return
@@ -99,6 +163,10 @@ def make_handler(server: McpServer, token: str):
             self._send_error_json(404, "not found")
 
         def do_POST(self) -> None:  # noqa: N802 (stdlib naming)
+            if not self._host_allowed():
+                self._send_error_json(
+                    403, "Host header is not allowed for this bind address")
+                return
             if self.path != "/mcp":
                 self._send_error_json(404, "not found")
                 return
@@ -116,10 +184,17 @@ def make_handler(server: McpServer, token: str):
             try:
                 length = int(raw_length) if raw_length is not None else 0
             except ValueError:
-                self._send_error_json(400, "invalid Content-Length")
+                self._send_error_json(
+                    400, "invalid Content-Length", close=True)
+                return
+            if length < 0:
+                # read(-n) would block until EOF - refuse instead.
+                self._send_error_json(
+                    400, "invalid Content-Length", close=True)
                 return
             if length > MAX_BODY_BYTES:
-                self._send_error_json(413, "request body too large")
+                self._send_error_json(
+                    413, "request body too large", close=True)
                 return
             raw = self.rfile.read(length) if length > 0 else b""
             try:

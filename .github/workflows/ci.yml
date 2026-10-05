@@ -7,10 +7,20 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # OS coverage without a matrix explosion: every Python version
+    # runs on Ubuntu, and 3.12 (the development version) additionally
+    # runs on Windows and macOS - 5 combinations in total.
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13"]
+        include:
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,6 +37,9 @@ jobs:
         # real regression (a new module shipping without tests).
         run: python -m pytest -q --cov=omnibutler --cov-fail-under=80
       - name: Secret scan (filenames)
+        # Windows runners default to PowerShell, which has no grep;
+        # Git Bash ships with the runner image.
+        shell: bash
         run: |
           if git ls-files | grep -Ei '(token|secret|\.env)' | grep -v '.gitignore'; then
             echo "possible secret file tracked by git" && exit 1

@@ -8,6 +8,68 @@ For the full release notes, see
 Every driver below is tested against fake devices unless noted otherwise -
 real-hardware verification is still the project's open gap.
 
+## [0.10.0] - 2026-10-05
+
+The audit round: four independent audits (cross-platform, security
+and concurrency, data layer and performance, docs and UI alignment)
+went over the whole codebase; every finding below was fixed, and the
+few accepted trade-offs are recorded in the docs.
+
+### Added
+- CI test matrix now includes Windows and macOS runners
+  (Python 3.12), so platform-specific breakages are caught before
+  release instead of after.
+- docs/platform-support.md: per-platform notes for Windows, macOS,
+  Linux, Android (Termux) and iOS (Shortcuts + approvals page -
+  iOS cannot run the daemon itself).
+- The approvals page is bilingual: `?lang=zh|en` wins, otherwise
+  the browser's Accept-Language decides; dark-mode and
+  phone-friendly styling included.
+
+### Fixed
+- Confirmation queue hardening: all queue mutations are locked
+  in-process and across processes, and a queued action is claimed
+  atomically before execution - approving the same item from two
+  places can no longer run it twice. The queue file is now 0600,
+  corrupt files are preserved as .corrupt instead of silently
+  dropped, and decided items older than 30 days are pruned.
+- `save_config` crashed on Windows (`os.fchmod` is Unix-only) -
+  storing a secret via `tob setup-secret` or `tob fetch-keys
+  --store` now works there; config writes are also locked against
+  concurrent processes, and version backups get 0600.
+- The phone gateway only accepts geofence and presence events.
+  It could previously relay forged state_change/schedule/session
+  events and trigger scenes.
+- `tob setup` now lists all eight guides; five topics (matter,
+  zigbee2mqtt, gateway, tuya_cloud, xiaomi_cloud) were unreachable
+  from the CLI.
+- Webhook failure messages no longer include the webhook URL.
+- Broadlink code store writes atomically and recovers from a
+  corrupt file instead of taking the driver down.
+- Scene files are size-capped (1 MiB) and duplicate YAML keys are
+  an error instead of silently overriding.
+
+### Changed
+- Audit reads stream line by line and skip torn lines instead of
+  failing; `tob audit --last 20` on a full 60 MB log went from
+  1.8 s / 362 MB to 0.13 s / ~45 MB.
+- Data streams load lazily (everyday commands no longer pay for
+  history they do not read) and appending a point no longer
+  re-sorts the whole series (about 90x faster at 50k points).
+- Polling runs drivers in parallel (bounded pool, serial within a
+  driver; OMNIBUTLER_POLL_SERIAL=1 restores the old behaviour).
+  One device failing no longer aborts the rest of its driver, and
+  the Matter driver caches its node list for 60 seconds.
+- Approval webhook notifications are sent from a background queue
+  instead of blocking the daemon loop.
+- MCP stdio runs over explicit UTF-8 streams and survives
+  malformed messages with proper JSON-RPC errors.
+- HTTP surfaces share hardening: malformed/oversized bodies close
+  the connection, handlers have a 30 s socket timeout, non-loopback
+  binds validate the Host header, cloud response bodies are read
+  with a 4 MiB cap, and device ids are URL-quoted.
+- Backup archives are created 0600 (they contain your config).
+
 ## [0.9.0] - 2026-10-05
 
 ### Added

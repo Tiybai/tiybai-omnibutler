@@ -74,6 +74,7 @@ import logging
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -99,6 +100,10 @@ _KINDS = (KIND_AUTH_FAILED, KIND_NETWORK, KIND_BAD_RESPONSE)
 
 _DEFAULT_BASE_URL = "https://openapi.tuyacn.com"
 _HTTP_TIMEOUT = 15.0
+#: Cloud answers are small JSON documents; a body past this is a
+#: broken (or hostile) endpoint, not data. Reads are bounded so a
+#: peer cannot make the bridge buffer an unbounded response.
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _TOKEN_SAFETY_MARGIN = 30.0  # refresh this many seconds before expiry
 # Tuya business code for "token invalid / expired" (vendor-published).
 _CODE_TOKEN_INVALID = 1010
@@ -154,6 +159,24 @@ def _headers_to_dict(message: Any) -> dict[str, str]:
     return out
 
 
+def _read_limited(stream: Any) -> str:
+    """Read a response body with a hard cap; oversize is bad_response.
+
+    Reads one byte past the cap so an oversize body is *detected* and
+    refused rather than silently truncated (a truncated JSON document
+    could parse into wrong data downstream).
+    """
+    data = stream.read(MAX_RESPONSE_BYTES + 1)
+    if len(data) > MAX_RESPONSE_BYTES:
+        raise TuyaCloudError(
+            KIND_BAD_RESPONSE,
+            "Tuya cloud: the server's answer is over "
+            f"{MAX_RESPONSE_BYTES // (1024 * 1024)} MiB; refusing to "
+            "process it.",
+        )
+    return data.decode("utf-8", errors="replace")
+
+
 def _urllib_http(
     method: str,
     url: str,
@@ -174,13 +197,13 @@ def _urllib_http(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return HttpResponse(
                 status=response.status,
-                text=response.read().decode("utf-8", errors="replace"),
+                text=_read_limited(response),
                 headers=_headers_to_dict(response.headers),
             )
     except urllib.error.HTTPError as exc:
         return HttpResponse(
             status=exc.code,
-            text=exc.read().decode("utf-8", errors="replace"),
+            text=_read_limited(exc),
             headers=_headers_to_dict(exc.headers),
         )
 
@@ -341,7 +364,7 @@ class _TuyaCloudClient:
         the cached token and retries exactly once with a fresh one -
         tokens expire mid-flight in real deployments.
         """
-        body = (json.dumps(body_obj).encode("utf-8")
+        body = (json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
                 if body_obj is not None else None)
         for attempt in (0, 1):
             token = self.access_token()
@@ -457,7 +480,7 @@ def _color_to_cloud(hex_color: str) -> str:
     hue, sat, val = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)
     return json.dumps({
         "h": round(hue * 360), "s": round(sat * 1000), "v": round(val * 1000),
-    })
+    }, ensure_ascii=False)
 
 
 class TuyaCloudDriver(Driver):
@@ -530,7 +553,9 @@ class TuyaCloudDriver(Driver):
         uid = self._effective_uid(client)
         if uid:
             listed = client.request(
-                "GET", f"/v1.0/users/{uid}/devices",
+                "GET",
+                f"/v1.0/users/{urllib.parse.quote(str(uid), safe='')}"
+                "/devices",
                 what="Tuya cloud device list")
         else:
             listed = client.request(
@@ -549,7 +574,9 @@ class TuyaCloudDriver(Driver):
     def _device_status(self, client: _TuyaCloudClient,
                        cloud_id: str) -> dict[str, Any]:
         status = client.request(
-            "GET", f"/v1.0/devices/{cloud_id}/status",
+            "GET",
+            f"/v1.0/devices/{urllib.parse.quote(str(cloud_id), safe='')}"
+            "/status",
             what=f"Tuya cloud device {cloud_id} status")
         if isinstance(status, dict):  # some shapes wrap the list
             status = status.get("status") or status.get("list")
@@ -722,7 +749,9 @@ class TuyaCloudDriver(Driver):
             raw = canonical
         cloud_id = self._cloud_ids[device_id]
         client.request(
-            "POST", f"/v1.0/devices/{cloud_id}/commands",
+            "POST",
+            f"/v1.0/devices/{urllib.parse.quote(str(cloud_id), safe='')}"
+            "/commands",
             what=f"Tuya cloud device {cloud_id} command",
             body_obj={"commands": [{"code": code, "value": raw}]},
         )

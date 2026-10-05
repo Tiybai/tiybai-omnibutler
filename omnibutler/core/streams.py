@@ -36,6 +36,7 @@ producers append, scenes/agents query. There is no set/delete API.
 
 from __future__ import annotations
 
+import bisect
 import json
 import threading
 import time
@@ -116,7 +117,15 @@ class DataPoint:
 
 
 class StreamStore:
-    """Append-only, thread-safe, JSONL-backed store of data points."""
+    """Append-only, thread-safe, JSONL-backed store of data points.
+
+    The on-disk replay is *lazy*: construction does not read the file
+    at all. Every ``tob`` command builds a runtime - and with it a
+    store - even when it never touches stream data, and replaying tens
+    of megabytes on each such command was pure waste. The first actual
+    read or append replays the files once (see :meth:`_ensure_loaded`);
+    from then on the store behaves exactly as an eagerly loaded one.
+    """
 
     def __init__(
         self,
@@ -137,9 +146,27 @@ class StreamStore:
         self._lock = threading.RLock()
         self._streams: dict[str, DataStream] = {}
         self._points: dict[str, list[DataPoint]] = {}
-        self._load()
+        # Deliberately NOT loaded here: see the class docstring. The
+        # replay happens on first use via _ensure_loaded().
+        self._loaded = False
 
     # -- persistence ------------------------------------------------------
+    def _ensure_loaded(self) -> None:
+        """Replay the JSONL files once, on first actual use.
+
+        Callers must hold ``self._lock``. Every public method calls
+        this before touching the in-memory mirror - reads obviously,
+        but appends too: a store that wrote before ever loading would
+        keep a mirror blind to the points already on disk, and the
+        next load would have to merge (or worse, the in-memory append
+        order would disagree with the file). Loading first keeps one
+        simple invariant: once any method returns, the mirror covers
+        everything the file held when the method started.
+        """
+        if not self._loaded:
+            self._load()
+            self._loaded = True
+
     def _load(self) -> None:
         """Rebuild descriptors and points by replaying the JSONL files.
 
@@ -196,16 +223,19 @@ class StreamStore:
         its descriptor), which is all the gateway ingest path needs.
         """
         with self._lock:
+            self._ensure_loaded()
             self._streams[stream.id] = stream
             return stream
 
     def get_stream(self, stream_id: str) -> DataStream | None:
         with self._lock:
+            self._ensure_loaded()
             return self._streams.get(stream_id)
 
     def streams(self, kind: str | None = None) -> list[DataStream]:
         """All registered streams, optionally filtered by exact ``kind``."""
         with self._lock:
+            self._ensure_loaded()
             found = list(self._streams.values())
         if kind is not None:
             found = [s for s in found if s.kind == kind]
@@ -235,6 +265,7 @@ class StreamStore:
             meta=dict(meta) if meta else {},
         )
         with self._lock:
+            self._ensure_loaded()
             if stream is not None:
                 self.register(stream)
             descriptor = self._streams.get(stream_id)
@@ -245,13 +276,23 @@ class StreamStore:
                 )
             self._persist(descriptor, point)
             points = self._points.setdefault(stream_id, [])
-            points.append(point)
-            points.sort(key=lambda p: p.ts)
+            if points and point.ts < points[-1].ts:
+                # The rare out-of-order arrival: insert in sorted
+                # position instead of re-sorting the whole series.
+                bisect.insort(points, point, key=lambda p: p.ts)
+            else:
+                # The common path - the new point is the newest, so a
+                # plain append keeps the series sorted in O(1). The old
+                # code re-sorted the entire series per point, which
+                # made ingest quadratic (milliseconds per point once a
+                # stream held tens of thousands).
+                points.append(point)
             return point
 
     def latest(self, stream_id: str) -> DataPoint | None:
         """The most recent point of a stream, or None when it has none."""
         with self._lock:
+            self._ensure_loaded()
             points = self._points.get(stream_id)
             return points[-1] if points else None
 
@@ -280,6 +321,7 @@ class StreamStore:
         merged and globally sorted).
         """
         with self._lock:
+            self._ensure_loaded()
             if stream_id is not None:
                 ids = [stream_id] if stream_id in self._points else []
             elif kind is not None:
@@ -299,4 +341,5 @@ class StreamStore:
 
     def __len__(self) -> int:
         with self._lock:
+            self._ensure_loaded()
             return sum(len(points) for points in self._points.values())

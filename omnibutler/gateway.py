@@ -21,8 +21,13 @@ publishes Event(type="geofence", source="phone",
 data={"zone": "home", "transition": "enter"}) - exactly the shape
 SceneEngine._trigger_matches compares trigger.zone / trigger.transition
 against (see examples/scenes/arrive-home.yaml: zone "home", transitions
-"enter" / "exit"). Other event types (presence, ...) pass through with
-their payload as event data.
+"enter" / "exit"). Event types are whitelisted: only ``geofence`` and
+``presence`` may be published by a phone. The other types on the bus
+(``state_change``, ``schedule``, ``session_opened`` /
+``session_closed``, ``stream_appended``) are produced by the bridge
+itself - device polling, the scene clock, the session manager - so
+accepting them here would let anyone holding the gateway token forge
+device state and fire scenes; they are refused with a 400 instead.
 
 Authentication is not optional and uses its own token
 (OMNIBUTLER_GATEWAY_TOKEN) - separate from the MCP HTTP token and from
@@ -37,9 +42,11 @@ default bind is 127.0.0.1 and binding 0.0.0.0 logs a loud warning.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import logging
 import os
+import socket
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -51,9 +58,22 @@ logger = logging.getLogger(__name__)
 
 TOKEN_ENV_VAR = "OMNIBUTLER_GATEWAY_TOKEN"
 MAX_BODY_BYTES = 1024 * 1024  # 1 MiB: a day of phone data is far smaller.
-DEFAULT_PORT = 8766
+#: One ingest call may carry at most this many points; larger history
+#: syncs must be split across calls.
+MAX_POINTS_PER_BATCH = 1000
+#: Socket timeout (seconds) for gateway connections: a client that
+#: connects and then goes silent must not pin a handler thread forever.
+SOCKET_TIMEOUT = 30.0
+DEFAULT_PORT = 8767  # the approvals page lives on 8766; keep them apart
 
 _GEOFENCE_TRANSITIONS = ("enter", "exit")
+
+#: The only event types a phone may publish. Everything else on the bus
+#: (state_change, schedule, session_opened / session_closed,
+#: stream_appended) is produced by the bridge itself; accepting it from
+#: a gateway-token holder would let that token forge device state and
+#: fire scenes, so build_event refuses it.
+_PHONE_EVENT_TYPES = frozenset({"geofence", "presence"})
 
 
 class GatewayError(RuntimeError):
@@ -89,6 +109,13 @@ def build_event(payload: Any) -> Event:
     event_type = payload.get("type")
     if not isinstance(event_type, str) or not event_type.strip():
         raise ValueError("event payload needs a non-empty string 'type'")
+    if event_type not in _PHONE_EVENT_TYPES:
+        raise ValueError(
+            f"event type {event_type!r} is not accepted from the phone "
+            f"gateway: phones may only publish "
+            f"{sorted(_PHONE_EVENT_TYPES)} (state changes, schedules and "
+            f"session events are produced by the bridge itself)"
+        )
     data = {k: v for k, v in payload.items() if k not in ("type", "ts")}
     if event_type == "geofence":
         zone = data.get("zone")
@@ -127,6 +154,12 @@ def ingest_points(store: StreamStore, payload: Any) -> int:
     raw_points = payload.get("points")
     if not isinstance(raw_points, list):
         raise ValueError("ingest payload needs a 'points' array")
+    if len(raw_points) > MAX_POINTS_PER_BATCH:
+        raise ValueError(
+            f"ingest batch carries {len(raw_points)} points; the limit "
+            f"is {MAX_POINTS_PER_BATCH} per batch - split it into "
+            f"smaller batches"
+        )
     default_descriptor = payload.get("stream")
 
     parsed: list[tuple[DataStream | None, DataPoint]] = []
@@ -184,6 +217,44 @@ def ingest_points(store: StreamStore, payload: Any) -> int:
 # -- HTTP plumbing --------------------------------------------------------------
 
 
+_LOOPBACK_BINDS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _host_header_allowed(host_header: str | None, bind_host: str) -> bool:
+    """DNS-rebinding guard for the Host header.
+
+    When the server binds a loopback address the check is skipped: only
+    local processes can reach it anyway. When it binds anything else,
+    the Host header must look like this machine: an empty header (an
+    HTTP/1.0-style client cannot be rebinding anyone), ``localhost``,
+    the bind address itself, any IP literal, or the machine's own
+    hostname. A random public name (``evil.example``) is refused - a
+    browser tricked into DNS-rebinding this port would carry exactly
+    that kind of Host.
+    """
+    if bind_host in _LOOPBACK_BINDS:
+        return True
+    if host_header is None or not host_header.strip():
+        return True
+    host = host_header.strip()
+    if host.startswith("["):  # [v6 literal]:port
+        end = host.find("]")
+        name = host[1:end] if end != -1 else host
+    else:
+        name = host.split(":", 1)[0]
+    name = name.rstrip(".").lower()
+    if not name:
+        return True
+    if name == "localhost" or name == bind_host.lower():
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    return name == socket.gethostname().lower()
+
+
 def make_handler(bus: EventBus, store: StreamStore, token: str):
     """Build a request-handler class bound to *bus*, *store* and *token*.
 
@@ -194,6 +265,9 @@ def make_handler(bus: EventBus, store: StreamStore, token: str):
     class GatewayHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "tiybai-omnibutler-gateway"
+        # socketserver applies this to every accepted connection: a
+        # client that goes silent must not pin a handler thread forever.
+        timeout = SOCKET_TIMEOUT
 
         # -- plumbing ------------------------------------------------------
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -202,16 +276,30 @@ def make_handler(bus: EventBus, store: StreamStore, token: str):
             # leak into logs through here.
             logger.debug("%s - %s", self.address_string(), format % args)
 
-        def _send_json(self, status: int, payload: Any) -> None:
+        def _send_json(self, status: int, payload: Any, *,
+                       close: bool = False) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
+            if close:
+                # The request body was rejected unread (bad or oversized
+                # Content-Length): leftover bytes would corrupt the next
+                # request on this keep-alive connection, so close it.
+                self.send_header("Connection", "close")
+                self.close_connection = True
             self.end_headers()
             self.wfile.write(body)
 
-        def _send_error_json(self, status: int, message: str) -> None:
-            self._send_json(status, {"error": message})
+        def _send_error_json(self, status: int, message: str, *,
+                             close: bool = False) -> None:
+            self._send_json(status, {"error": message}, close=close)
+
+        def _host_allowed(self) -> bool:
+            address = self.server.server_address
+            bind_host = (str(address[0])
+                         if isinstance(address, tuple) else "")
+            return _host_header_allowed(self.headers.get("Host"), bind_host)
 
         def _authorized(self) -> bool:
             header = self.headers.get("Authorization") or ""
@@ -224,10 +312,17 @@ def make_handler(bus: EventBus, store: StreamStore, token: str):
             try:
                 length = int(raw_length) if raw_length is not None else 0
             except ValueError:
-                self._send_error_json(400, "invalid Content-Length")
+                self._send_error_json(
+                    400, "invalid Content-Length", close=True)
+                return None
+            if length < 0:
+                # read(-n) would block until EOF - refuse instead.
+                self._send_error_json(
+                    400, "invalid Content-Length", close=True)
                 return None
             if length > MAX_BODY_BYTES:
-                self._send_error_json(413, "request body too large")
+                self._send_error_json(
+                    413, "request body too large", close=True)
                 return None
             raw = self.rfile.read(length) if length > 0 else b""
             try:
@@ -242,6 +337,10 @@ def make_handler(bus: EventBus, store: StreamStore, token: str):
 
         # -- routes ----------------------------------------------------------
         def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
+            if not self._host_allowed():
+                self._send_error_json(
+                    403, "Host header is not allowed for this bind address")
+                return
             if self.path == "/health":
                 self._send_json(200, {"status": "ok"})
                 return
@@ -252,6 +351,10 @@ def make_handler(bus: EventBus, store: StreamStore, token: str):
             self._send_error_json(404, "not found")
 
         def do_POST(self) -> None:  # noqa: N802 (stdlib naming)
+            if not self._host_allowed():
+                self._send_error_json(
+                    403, "Host header is not allowed for this bind address")
+                return
             if self.path not in ("/ingest", "/event"):
                 self._send_error_json(404, "not found")
                 return

@@ -40,6 +40,7 @@ import os
 import socket
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from typing import Any
@@ -177,6 +178,11 @@ class HomeAssistantDriver(Driver):
     #: Total attempts per request: the initial try plus one retry.
     MAX_ATTEMPTS = 2
 
+    #: HA answers are JSON documents; a body past this is a broken (or
+    #: hostile) endpoint, not data. Reads are bounded so a peer cannot
+    #: make the bridge buffer an unbounded response.
+    MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+
     def __init__(
         self,
         base_url: str | None = None,
@@ -261,7 +267,7 @@ class HomeAssistantDriver(Driver):
         """
         self._require_config()
         url = f"{self.base_url}{path}"
-        data = json.dumps(payload).encode() if payload is not None else None
+        data = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
         for attempt in range(1, self.MAX_ATTEMPTS + 1):
             last = attempt == self.MAX_ATTEMPTS
             request = urllib.request.Request(url, data=data, method=method)
@@ -269,7 +275,16 @@ class HomeAssistantDriver(Driver):
             request.add_header("Content-Type", "application/json")
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    body = response.read().decode()
+                    # Read one byte past the cap so an oversize body is
+                    # detected and refused, never silently truncated.
+                    raw = response.read(self.MAX_RESPONSE_BYTES + 1)
+                if len(raw) > self.MAX_RESPONSE_BYTES:
+                    raise HomeAssistantError(
+                        f"Home Assistant returned a response over "
+                        f"{self.MAX_RESPONSE_BYTES // (1024 * 1024)} MiB "
+                        f"for {method} {path}; refusing to process it."
+                    )
+                body = raw.decode()
                 return json.loads(body) if body else None
             except urllib.error.HTTPError as exc:
                 if exc.code in (401, 403):
@@ -405,7 +420,8 @@ class HomeAssistantDriver(Driver):
                 f"HA entity {device_id!r} is excluded by the configured "
                 f"entity prefix filter {list(self.entity_prefixes)}"
             )
-        item = self._request("GET", f"/api/states/{device_id}")
+        item = self._request(
+            "GET", f"/api/states/{urllib.parse.quote(device_id, safe='')}")
         if not item:
             raise DeviceNotFoundError(f"Home Assistant has no entity {device_id!r}")
         device = self._device_from_state(item)
@@ -548,7 +564,7 @@ class HomeAssistantDriver(Driver):
                 "'auth_required'."
             )
         await connection.send(json.dumps(
-            {"type": "auth", "access_token": self.token}))
+            {"type": "auth", "access_token": self.token}, ensure_ascii=False))
         reply = self._decode_ws_message(await connection.recv())
         if reply.get("type") == "auth_invalid":
             raise _SubscriptionAuthFailed(
@@ -565,7 +581,7 @@ class HomeAssistantDriver(Driver):
         await connection.send(json.dumps({
             "id": 1, "type": "subscribe_events",
             "event_type": "state_changed",
-        }))
+        }, ensure_ascii=False))
         result = self._decode_ws_message(await connection.recv())
         if result.get("type") == "result" and result.get("success") is False:
             raise HomeAssistantConnectionError(
@@ -647,7 +663,11 @@ class HomeAssistantDriver(Driver):
         else:
             service = f"set_{property_name}"
             service_data[property_name] = value
-        self._request("POST", f"/api/services/{domain}/{service}", service_data)
+        self._request(
+            "POST",
+            f"/api/services/{urllib.parse.quote(domain, safe='')}"
+            f"/{urllib.parse.quote(service, safe='')}",
+            service_data)
         return {property_name: value}
 
     def call_action(
@@ -662,5 +682,9 @@ class HomeAssistantDriver(Driver):
         service = service_map.get(action, action)
         payload = {"entity_id": device_id}
         payload.update(params)
-        self._request("POST", f"/api/services/{domain}/{service}", payload)
+        self._request(
+            "POST",
+            f"/api/services/{urllib.parse.quote(domain, safe='')}"
+            f"/{urllib.parse.quote(service, safe='')}",
+            payload)
         return {"action": action, "service": f"{domain}.{service}"}

@@ -413,6 +413,21 @@ class Zigbee2MqttDriver(Driver):
                 "friendly_name (the name the device has in Zigbee2MQTT)."
             )
         friendly = str(friendly)
+        # The friendly name becomes a literal MQTT topic level
+        # (<base>/<friendly_name>/set), so characters with topic
+        # meaning ('/', '+', '#') or padding whitespace would silently
+        # break - or widen - every topic this device uses. Refuse them
+        # at load time and say which device is at fault.
+        if friendly != friendly.strip() or any(
+                char in friendly for char in "/+#"):
+            label = entry.get("name") or entry.get("id") or friendly
+            raise DriverNotConfiguredError(
+                f"Zigbee2MQTT device {label!r}: friendly_name "
+                f"{friendly!r} must not contain '/', '+', '#' or "
+                "leading/trailing whitespace - those characters break "
+                "MQTT topics. Rename the device in Zigbee2MQTT and use "
+                "the new name here."
+            )
         explicit = entry.get("properties")
         if explicit is not None:
             properties = self._properties_from_names(explicit, friendly)
@@ -648,7 +663,7 @@ class Zigbee2MqttDriver(Driver):
                 f"Writable mappings: {sorted(_OUTBOUND)}."
             )
         field, convert = mapping
-        payload = json.dumps({field: convert(canonical)})
+        payload = json.dumps({field: convert(canonical)}, ensure_ascii=False)
         topic = f"{self._base_topic}/{self._friendly_of(device_id)}/set"
         client.publish(topic, payload)
         # Optimistic cache update: Z2M's answering state message will

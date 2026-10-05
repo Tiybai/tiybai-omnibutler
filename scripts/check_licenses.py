@@ -35,8 +35,15 @@ BLOCKED_MARKERS = ("gpl", "agpl", "lgpl", "copyleft", "commons clause")
 def main() -> int:
     import os
 
-    script = os.path.join(os.path.dirname(sys.executable), "pip-licenses")
-    cmd = ([script] if os.path.exists(script)
+    # The console script sits next to the interpreter; on Windows it
+    # carries an .exe suffix, so try both names before the -m fallback.
+    bindir = os.path.dirname(sys.executable)
+    script = next(
+        (candidate for name in ("pip-licenses", "pip-licenses.exe")
+         if os.path.exists(candidate := os.path.join(bindir, name))),
+        None,
+    )
+    cmd = ([script] if script is not None
            else [sys.executable, "-m", "piplicenses"])
     try:
         out = subprocess.run(

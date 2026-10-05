@@ -108,6 +108,7 @@ import itertools
 import json
 import os
 import threading
+import time
 from collections.abc import Coroutine, Iterable
 from typing import Any, cast
 
@@ -134,6 +135,12 @@ _URL_ENV_VAR = "MATTER_SERVER_URL"
 _NODES_ENV_VAR = "MATTER_NODES_JSON"
 _DEFAULT_SERVER_URL = "ws://127.0.0.1:5580/ws"
 _CONTROLLER_ID = "matter-controller"
+
+#: Seconds a fetched node list is reused before get_nodes is asked
+#: again. State polling reads every device on a short interval; paying
+#: one full node-list round-trip per device per poll does not scale,
+#: and a node's attribute set is exactly what the list carries.
+_NODES_CACHE_TTL = 60.0
 
 # Matter cluster ids (from the Matter cluster specification).
 _CLUSTER_ONOFF = 0x0006
@@ -234,6 +241,8 @@ class MatterDriver(Driver):
             self._labels[node_id] = label
         self._timeout = timeout
         self._message_ids = itertools.count(1)
+        self._nodes_cache: list[dict[str, Any]] | None = None
+        self._nodes_cache_at = 0.0
         self._devices: dict[str, Device] = {}
         self._snapshots: dict[str, dict[tuple[int, int], Any]] = {}
         self._device_node: dict[str, int] = {}
@@ -314,7 +323,7 @@ class MatterDriver(Driver):
         request = {"message_id": message_id, "command": command, "args": args}
         try:
             async with websockets.connect(self._server_url) as connection:
-                await connection.send(json.dumps(request))
+                await connection.send(json.dumps(request, ensure_ascii=False))
                 while True:
                     raw = await asyncio.wait_for(
                         connection.recv(), timeout=self._timeout
@@ -353,16 +362,41 @@ class MatterDriver(Driver):
                 "reachable at that address?"
             ) from exc
 
-    def _fetch_nodes(self) -> list[dict[str, Any]]:
+    def _fetch_nodes(self, *, force: bool = False) -> list[dict[str, Any]]:
+        """The controller's node list, cached for ``_NODES_CACHE_TTL``.
+
+        ``get_state`` syncs one device by scanning this list, so an
+        uncached fetch made a poll of N devices cost N full round-trips
+        of the entire fabric's attributes. Within the TTL the cached
+        list is reused (returned as a shallow copy; callers treat node
+        payloads as read-only). ``force=True`` - used by discover(),
+        the explicit refresh - always refetches; successful writes and
+        commissions invalidate the cache instead (see
+        :meth:`_invalidate_nodes_cache`), so the driver's own actions
+        are never masked by it. Changes made by other controllers can
+        lag by at most the TTL.
+        """
+        if not force and self._nodes_cache is not None \
+                and time.monotonic() - self._nodes_cache_at < _NODES_CACHE_TTL:
+            return list(self._nodes_cache)
         result = self._rpc("get_nodes")
         if result is None:
-            return []
-        if not isinstance(result, list):
+            nodes: list[dict[str, Any]] = []
+        elif not isinstance(result, list):
             raise OmniButlerError(
                 "The Matter controller answered get_nodes with an "
                 "unexpected shape (expected a list of nodes)."
             )
-        return [node for node in result if isinstance(node, dict)]
+        else:
+            nodes = [node for node in result if isinstance(node, dict)]
+        self._nodes_cache = nodes
+        self._nodes_cache_at = time.monotonic()
+        return list(nodes)
+
+    def _invalidate_nodes_cache(self) -> None:
+        """Drop the cached node list (our own writes change the fabric)."""
+        self._nodes_cache = None
+        self._nodes_cache_at = 0.0
 
     # -- node -> device mapping ---------------------------------------------
     @staticmethod
@@ -584,7 +618,9 @@ class MatterDriver(Driver):
 
     # -- Driver API --------------------------------------------------------
     def discover(self) -> list[Device]:
-        for node in self._fetch_nodes():
+        # Discovery is the explicit refresh: always refetch, never
+        # serve the node list from the cache.
+        for node in self._fetch_nodes(force=True):
             self._sync_node(node)
         return self.list_devices()
 
@@ -618,6 +654,7 @@ class MatterDriver(Driver):
                 "payload": payload,
             },
         )
+        self._invalidate_nodes_cache()
 
     def _write_attribute(
         self, node_id: int, endpoint: int, cluster: int, attribute: int, value: Any
@@ -630,6 +667,7 @@ class MatterDriver(Driver):
                 "value": value,
             },
         )
+        self._invalidate_nodes_cache()
 
     def set_property(
         self, device_id: str, property_name: str, value: Any
@@ -746,6 +784,9 @@ class MatterDriver(Driver):
         if "network_only" in params:
             args["network_only"] = bool(params["network_only"])
         result = self._rpc("commission_with_code", args)
+        # A successful commission may have added a node: the cached
+        # node list no longer describes the fabric.
+        self._invalidate_nodes_cache()
         # Report only what the controller confirmed; this driver did not
         # pair anything itself.
         outcome: dict[str, Any] = {"commission": "forwarded to controller"}

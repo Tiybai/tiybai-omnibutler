@@ -106,9 +106,12 @@ GET /health
 - 其它 zone（比如 `office`）也是合法事件，只是没有场景在听，
   什么都不会发生。
 
-其它类型的事件（比如 `{"type": "presence", "person": "zhou",
-"present": true}`）也能发，会原样进事件总线，`source` 记为 `phone`；
-没有场景或工具在听的类型，发了也就发了。
+除 `geofence` 外还有一类能发：`presence`（比如
+`{"type": "presence", "person": "zhou", "present": true}`），同样
+`source` 记为 `phone`。再没有别的了——`state_change`、`schedule`、
+`session_*` 这些类型只能由桥自己产生（设备轮询、场景时钟、会话
+管理），手机发来一律 **400** 拒绝：否则拿到手机口令的人可以伪造
+设备状态、触发场景，白名单就是防这个的。
 
 ## 错误码
 
@@ -116,11 +119,12 @@ GET /health
   里的口令与启动网关时的 `OMNIBUTLER_GATEWAY_TOKEN` 是否一致。
 - **400**：请求体本身有问题——不是合法 JSON、不是 JSON 对象、
   `points` 不是数组、某个点没有 `value`、引用了从没描述过的流、
-  地理围栏缺 `zone`/`transition` 或 `transition` 不是 `enter`/`exit`。
+  地理围栏缺 `zone`/`transition` 或 `transition` 不是 `enter`/`exit`、
+  事件 `type` 不在白名单（只有 `geofence` 与 `presence`）。
   返回体里有 `{"error": "..."}` 说明具体错在哪。整批校验，有一个
   点不合格，整批都不写。
 - **404**：路径写错了（只有 `/health`、`/ingest`、`/event` 三个）。
-- **413**：请求体太大（上限 1 MB）——分批报，别一次塞太多点。
+- **413**：请求体太大（上限 1 MB），或单批点数超过 1000——分批报。
 
 ## 一个重要注意事项：别和 tob run 同时各跑一份场景
 

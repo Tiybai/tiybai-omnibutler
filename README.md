@@ -121,7 +121,9 @@ button and silence never means yes.
 Run it as an always-on butler with `tob run` (schedule triggers and
 device-state polling), check a real setup with `tob doctor`, and get
 plain-language help fetching a device key with `tob setup miio` /
-`tob setup tuya`. New in v0.4: `tob onboard` scans every driver and
+`tob setup tuya`. A fetched key can be stored without ever appearing
+on screen: `tob setup-secret miio.devices.0.token` prompts with
+hidden input and writes the config file with 0600 permissions. New in v0.4: `tob onboard` scans every driver and
 says in plain language what each found device still needs,
 `tob fetch-keys xiaomi|tuya` fetches local keys from the vendor cloud
 once (with your own account, only when no captcha/2FA blocks it), and
@@ -151,7 +153,29 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.9 (this release) - the final sweep: scenes gain delayed actions
+v0.10 (this release) - the audit round: four independent audits
+(cross-platform, security and concurrency, data layer and
+performance, docs and UI alignment) went over the whole codebase,
+and every finding was fixed or consciously accepted. The
+confirmation queue is now locked across processes, and a queued
+action is claimed atomically before it runs - approving the same
+item from the web page and the CLI can no longer execute it twice.
+Saving secrets no longer crashes on Windows. The phone gateway
+only accepts geofence and presence events; it can no longer forge
+state changes to trigger scenes. Reading the audit log is now a
+streaming pass (`tob audit --last 20` on a full 60 MB log: 1.8 s
+and 362 MB of memory before, 0.13 s and ~45 MB now) and data
+streams load lazily, so everyday commands stay fast no matter how
+much history has piled up. Polling runs drivers in parallel, and
+one dead device no longer stalls the rest of its driver. The
+approvals page follows your browser language (Chinese or English)
+and works properly on a phone screen. CI now also runs on Windows
+and macOS runners, and `tob setup` finally lists every guide it
+actually has - five topics were unreachable from the command line.
+Real-hardware verification moves to v0.11 - it still needs owners
+of real devices (issues #2 and #4).
+
+v0.9 - the final sweep: scenes gain delayed actions
 (`- delay: 300` - a light that turns itself off, a vacuum that starts
 once you have left); the Home Assistant driver subscribes to HA's
 event stream, so state changes reach scenes near-instantly instead of
@@ -159,9 +183,9 @@ on the 30-second poll; third-party drivers can ship as pip packages
 (entry point group `omnibutler.drivers`), no fork needed; `tob audit`
 and `tob backup` / `tob restore` cover the operator chores; the
 daemon refuses to start twice against the same state directory; CI
-adds a coverage floor (80%, currently 87%) and Python 3.13 to the
+adds a coverage floor (80%, currently 88%) and Python 3.13 to the
 test matrix; device-data reaches 20 profiles and the demo home gains
-a robot vacuum. Real-hardware verification moves to v0.10 - it still
+a robot vacuum. Real-hardware verification moves to v0.11 - it still
 needs owners of real devices (issues #2 and #4).
 
 v0.8 - robot vacuums join the Xiaomi local driver
@@ -173,8 +197,7 @@ webhook notification (`OMNIBUTLER_NOTIFY_WEBHOOK_URL` or
 take the POST), so a bridge running headless no longer queues in
 silence; scene schedules accept `days`, so rules like "weekdays at
 07:30" finally work; and CI gains lint (ruff) and type-check (mypy)
-gates, both green. Real-hardware verification moves to v0.9 - it
-still needs owners of real devices (issues #2 and #4).
+gates, both green.
 
 v0.7 - depth where it counts: the Xiaomi driver now
 covers lights, fans and humidifiers (standard MIOT services) next to
@@ -235,7 +258,11 @@ biggest gap** (issues #2 and #4).
 - [x] v0.9 - delayed scene actions; HA event-stream subscription;
       third-party drivers via entry points; audit / backup commands;
       daemon single-instance lock; coverage gate in CI
-- [ ] v0.10 - real-hardware verification round (needs owners of real
+- [x] v0.10 - the audit round: Windows/macOS in CI; confirmation
+      queue locked and claimed atomically; gateway event whitelist;
+      streaming audit reads and lazy stream loading; parallel
+      polling; bilingual approvals page
+- [ ] v0.11 - real-hardware verification round (needs owners of real
       devices - see issues #2 and #4)
 - [ ] Later - PyPI release (needs the maintainer's PyPI account)
 

@@ -38,6 +38,7 @@ it comes due, exactly as if the delay were not there.
 from __future__ import annotations
 
 import datetime as _dt
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -158,6 +159,12 @@ class SceneEngine:
         # Post-delay action segments waiting for their pause to elapse,
         # run by process_due(). At most one per scene (see _schedule_delayed).
         self._pending_delayed: list[_DelayedSegment] = []
+        # Serializes handle_event/process_due: events arrive from
+        # several threads (daemon polling, HA push callbacks, the
+        # gateway) and _value_since / _pending_delayed are shared
+        # mutable state. Re-entrant so a path that funnels back into
+        # handle_event while already holding it cannot self-deadlock.
+        self._lock = threading.RLock()
 
     def add_scene(self, scene: Scene) -> Scene:
         self.scenes[scene.name] = scene
@@ -334,6 +341,10 @@ class SceneEngine:
 
     # -- execution ----------------------------------------------------------
     def handle_event(self, event: Event) -> ExecutionReport:
+        with self._lock:
+            return self._handle_event(event)
+
+    def _handle_event(self, event: Event) -> ExecutionReport:
         self._track_state_change(event)
         report = ExecutionReport(event_type=event.type)
         for scene in self.scenes.values():
@@ -406,6 +417,10 @@ class SceneEngine:
         )
 
     def process_due(self, now: float | None = None) -> ExecutionReport:
+        with self._lock:
+            return self._process_due(now)
+
+    def _process_due(self, now: float | None = None) -> ExecutionReport:
         """Run every delayed segment whose pause has elapsed.
 
         ``now`` is a monotonic timestamp (defaults to the real monotonic
@@ -473,27 +488,49 @@ class SceneEngine:
                                  "failed", str(exc))
 
     def confirm(self, confirmation_id: str, agent: str = "human"):
-        """Execute a previously queued high-risk action, if still pending."""
+        """Execute a previously queued high-risk action, if still pending.
+
+        The item is *claimed* before anything executes: claiming moves
+        it to the terminal "confirmed" status atomically (see
+        :meth:`ConfirmationQueue.claim`), so when two approvers race -
+        a human at the CLI and one on the approvals page - exactly one
+        of them gets here and the action runs at most once. The loser
+        sees the same None as for an unknown or already-decided id.
+
+        If execution itself fails, the item stays "confirmed": it must
+        never fall back to pending, or a retry could run a high-risk
+        action the operator believes already ran (or was told failed).
+        The failure is written to the audit log and re-raised, so the
+        human sees exactly what went wrong and can queue a fresh action
+        deliberately if they still want it.
+        """
         item = self.confirmations.get(confirmation_id)
         if item is None or item.status != "pending":
             return None
-        if item.kind == "set_property":
-            result = self.manager.set_property(
-                item.device_id, item.name, item.value, agent=agent
-            )
-        else:
-            result = self.manager.call_action(
+        if not self.confirmations.claim(confirmation_id):
+            return None  # another approver claimed it first
+        try:
+            if item.kind == "set_property":
+                return self.manager.set_property(
+                    item.device_id, item.name, item.value, agent=agent
+                )
+            return self.manager.call_action(
                 item.device_id, item.name, item.params, agent=agent
             )
-        self.confirmations.mark(confirmation_id, "confirmed")
-        return result
+        except Exception as exc:
+            self.manager.audit.record(
+                agent=agent, device_id=item.device_id,
+                action="confirmation:execute_failed",
+                params={"confirmation_id": item.id, "kind": item.kind,
+                        "name": item.name, "value": item.value},
+                ok=False, error=str(exc),
+            )
+            raise
 
     def reject(self, confirmation_id: str) -> bool:
-        item = self.confirmations.get(confirmation_id)
-        if item is None or item.status != "pending":
-            return False
-        self.confirmations.mark(confirmation_id, "rejected")
-        return True
+        # Same atomic claim as confirm, with the "rejected" outcome:
+        # a reject racing an approve can never both win.
+        return self.confirmations.claim(confirmation_id, status="rejected")
 
 
 def schedule_event_now() -> Event:

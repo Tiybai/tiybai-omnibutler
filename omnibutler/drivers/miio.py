@@ -275,7 +275,8 @@ class _Session:
             self._request_id += 1
             request_id = self._request_id
             document = json.dumps(
-                {"id": request_id, "method": method, "params": params}
+                {"id": request_id, "method": method, "params": params},
+                ensure_ascii=False,
             ).encode()
             packet = build_data_packet(
                 self.token, self.device_id, self._current_stamp(), document

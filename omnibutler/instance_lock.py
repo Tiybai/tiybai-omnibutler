@@ -12,11 +12,14 @@ in the state directory holding the owner's pid and a random token.
 * Normal shutdown removes the file - but only when the token still
   matches, so a daemon never deletes a successor's lock.
 
-Liveness is probed with ``os.kill(pid, 0)`` (POSIX). On Windows that
-probe is not reliable from the stdlib, so an unprobeable pid is
-treated as alive there: a refused start is recoverable, two daemons
-on one queue are not. Everything is stdlib; no file locking APIs,
-so nothing here can block or crash on a platform quirk.
+Liveness is probed per platform. On POSIX, ``os.kill(pid, 0)``.
+On Windows that probe cannot be trusted (some CPython builds treat
+``os.kill`` differently), so the probe goes through Win32 directly -
+``OpenProcess`` + ``GetExitCodeProcess`` via ctypes. Whenever a probe
+cannot even be performed, the pid is treated as alive: a refused
+start is recoverable, two daemons on one queue are not. Everything
+is stdlib; no file locking APIs, so nothing here can block or crash
+on a platform quirk.
 """
 
 from __future__ import annotations
@@ -37,10 +40,46 @@ class DaemonAlreadyRunning(RuntimeError):
     """A live daemon already holds this state directory's lock."""
 
 
+#: Win32 access right that only *queries* a process, never controls it.
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+#: GetExitCodeProcess value for a process that is still running.
+_STILL_ACTIVE = 259
+#: OpenProcess error for "the process exists but is not ours to query".
+_ERROR_ACCESS_DENIED = 5
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Probe ``pid`` through Win32; unprobeable means alive (see above)."""
+    try:
+        import ctypes
+
+        # typeshed only declares WinDLL / get_last_error when checking
+        # *on* Windows, hence the targeted ignores for the Linux-run gate.
+        kernel32 = ctypes.WinDLL(  # type: ignore[attr-defined]
+            "kernel32", use_last_error=True)
+    except Exception:  # no ctypes / no kernel32 handle: cannot probe
+        return True
+    handle = kernel32.OpenProcess(
+        _PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # Access denied still proves the process exists; other errors
+        # (invalid parameter, not found) mean there is no such pid.
+        return ctypes.get_last_error() == _ERROR_ACCESS_DENIED  # type: ignore[attr-defined]
+    try:
+        code = ctypes.c_ulong(0)
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return True
+        return code.value == _STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def pid_alive(pid: int) -> bool:
     """Best-effort liveness probe for ``pid``; see the module docstring."""
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _pid_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -48,10 +87,7 @@ def pid_alive(pid: int) -> bool:
     except PermissionError:
         return True  # exists, just owned by another user
     except OSError:
-        # Not expected on POSIX; on Windows os.kill(pid, 0) cannot be
-        # trusted as a probe, so assume alive rather than risk a
-        # second daemon.
-        return os.name == "nt"
+        return False  # not expected on POSIX; nothing there to take over
     return True
 
 

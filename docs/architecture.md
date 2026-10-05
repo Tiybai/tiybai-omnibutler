@@ -95,3 +95,19 @@ keeps the modes distinct so each can mature independently.
 3. The manager validates values, routes to the owning driver, writes audit.
 4. Any high-risk action would have been queued, not executed - see
    `examples/scenes/garage-arrival.yaml`.
+
+## Data storage
+
+All runtime state lives in plain files under the state directory, no
+database: config as JSON, the audit log and the data streams as
+append-only JSONL with size-based rotation (a bounded number of
+rotated files caps how much disk history can take), and the
+confirmation queue as a single JSON file. Files stay inspectable
+with a text editor and trivial to back up (`tob backup`), which
+matters more at this scale than query power.
+
+A move to SQLite is planned only when one of these becomes true:
+retained data grows past ~200 MB, the audit/stream stores pass
+~2M entries, or several processes need to write the same store at
+once as a normal mode of operation. Until one of those happens,
+the file format stays.

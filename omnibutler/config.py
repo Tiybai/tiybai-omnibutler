@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from omnibutler.core.errors import OmniButlerError
+from omnibutler.core.filelock import FileLock
 
 CONFIG_ENV_VAR = "OMNIBUTLER_CONFIG"
 ENV_REF_PREFIX = "env:"
@@ -192,8 +193,21 @@ def save_config(path: str | Path, data: Mapping[str, Any]) -> Path:
     pristine pre-versioning copy. A file that exists but is not valid
     JSON, or not a JSON object, raises :class:`ConfigError` instead of
     being clobbered.
+
+    The whole read -> modify -> write sequence runs under a
+    cross-process file lock (``<name>.lock`` next to the config), so
+    two writers at once - say ``tob setup-secret`` and
+    ``tob fetch-keys --store`` - cannot silently lose each other's
+    update by both starting from the same stale read.
     """
     config_path = Path(path)
+    lock_path = config_path.with_name(f"{config_path.name}.lock")
+    with FileLock(lock_path):
+        return _save_config_locked(config_path, data)
+
+
+def _save_config_locked(config_path: Path, data: Mapping[str, Any]) -> Path:
+    """The body of :func:`save_config`, run under its file lock."""
     payload = dict(data)
     payload["version"] = CURRENT_CONFIG_VERSION
     if config_path.exists():
@@ -226,12 +240,21 @@ def save_config(path: str | Path, data: Mapping[str, Any]) -> Path:
             backup = config_path.with_name(f"{config_path.name}.v{old}.bak")
             if not backup.exists():
                 backup.write_bytes(config_path.read_bytes())
+                # The backup holds the same secrets as the config
+                # itself - keep it owner-only too.
+                with contextlib.suppress(OSError):
+                    os.chmod(backup, 0o600)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(config_path.parent), prefix=".config-", suffix=".tmp"
     )
     try:
-        os.fchmod(fd, 0o600)
+        # os.fchmod is POSIX-only - on Windows the attribute does not
+        # exist and touching it would crash every save; the chmod after
+        # the replace below applies the mode there instead.
+        fchmod = getattr(os, "fchmod", None)
+        if fchmod is not None:
+            fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
             fh.write("\n")

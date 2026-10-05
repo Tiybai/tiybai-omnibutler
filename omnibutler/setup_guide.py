@@ -328,6 +328,24 @@ _GUIDES = {
 }
 
 
+def guide_topics() -> list[str]:
+    """The canonical guide names, in display order - aliases excluded.
+
+    Several ``_GUIDES`` keys can point at the same text (``"xiaomi"`` is
+    an alias of ``"miio"``); the canonical name of each guide is the
+    first key that maps to its text. The CLI builds its ``tob setup``
+    choices from this list, so the accepted topics can never drift away
+    from the guides that actually exist.
+    """
+    topics: list[str] = []
+    seen: set[int] = set()
+    for name, text in _GUIDES.items():
+        if id(text) not in seen:
+            seen.add(id(text))
+            topics.append(name)
+    return topics
+
+
 def guide_text(brand: str) -> str:
     """Return the plain-language key-fetching guide for one brand.
 

@@ -32,10 +32,14 @@ a short timeout, and every failure is reported on stderr and swallowed.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import json
 import os
+import queue
 import sys
+import threading
+import time
 import urllib.request
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -153,7 +157,14 @@ def send_webhook(
                 )
                 return False
     except Exception as exc:  # never propagate, by design
-        print(f"omnibutler webhook: POST failed ({exc})", file=sys.stderr)
+        detail = str(exc)
+        if url and url in detail:
+            # Some transport errors embed the full URL (e.g. "unknown
+            # url type: 'https://…/secret-topic'"), and a webhook URL
+            # can carry a credential - never print it whole.
+            detail = detail.replace(url, "<webhook URL>")
+        print(f"omnibutler webhook: POST failed ({detail})",
+              file=sys.stderr)
         return False
     return True
 
@@ -182,6 +193,84 @@ class WebhookNotifier:
             self.url, build_payload(item),
             timeout=self.timeout, opener=self.opener,
         )
+
+
+class AsyncNotifier:
+    """Background-queue wrapper around a synchronous notifier.
+
+    The daemon's tick used to call the webhook inline, so one slow
+    push service (up to the full send timeout, per item) stalled every
+    tick behind it. With this wrapper ``notify()`` only enqueues and
+    returns at once; a single daemon thread sends in queue order.
+    Send semantics are unchanged: failures are reported on stderr by
+    the wrapped notifier and never retried. A full queue drops the
+    announcement with a stderr note rather than blocking the tick -
+    announcements are best-effort by design.
+
+    ``close()`` flushes with a bounded wait (the daemon calls it on
+    shutdown): it waits for queued items to drain, stops the thread,
+    and gives up after ``timeout`` seconds rather than holding the
+    process hostage to a dead endpoint.
+    """
+
+    _STOP: Any = object()  # queue sentinel: worker exits when read
+
+    def __init__(self, notifier: Any, *, max_pending: int = 100) -> None:
+        self._notifier = notifier
+        self._queue: queue.Queue[Any] = queue.Queue(maxsize=max_pending)
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._run, name="omnibutler-webhook-notify",
+            daemon=True)
+        self._thread.start()
+
+    def notify(self, item) -> bool:
+        """Enqueue *item* for sending; True when it was accepted.
+
+        False means the announcement was dropped (queue full or this
+        notifier is closed) - noted on stderr, never raised.
+        """
+        if self._closed:
+            print("omnibutler webhook: notifier is closed; dropping "
+                  "one announcement", file=sys.stderr)
+            return False
+        try:
+            self._queue.put_nowait(item)
+        except queue.Full:
+            print("omnibutler webhook: notification queue is full; "
+                  "dropping one announcement", file=sys.stderr)
+            return False
+        return True
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is self._STOP:
+                    return
+                # The wrapped notifier reports its own failures on
+                # stderr; suppress() is belt-and-braces so a broken
+                # notifier can never kill the worker silently-mid-queue.
+                with contextlib.suppress(Exception):
+                    self._notifier.notify(item)
+            finally:
+                self._queue.task_done()
+
+    def close(self, timeout: float = 5.0) -> None:
+        """Flush queued announcements and stop the worker (bounded)."""
+        if self._closed:
+            return
+        self._closed = True
+        deadline = time.monotonic() + max(0.0, timeout)
+        while (self._queue.unfinished_tasks
+               and time.monotonic() < deadline):
+            time.sleep(0.01)
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            self._queue.put(self._STOP, timeout=remaining)
+        except queue.Full:  # daemon thread: process exit reaps it
+            return
+        self._thread.join(timeout=remaining)
 
 
 def make_webhook_notifier(

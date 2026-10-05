@@ -83,6 +83,12 @@ def create_backup(
     with tarfile.open(dest, "w:gz") as tar:
         for arcname, src in members:
             tar.add(src, arcname=arcname, recursive=False)
+    # The archive carries the config verbatim (device keys included),
+    # so it gets the config file's own discipline: owner-only access.
+    # Best effort - filesystems without POSIX modes simply keep their
+    # default permissions.
+    with contextlib.suppress(OSError):
+        dest.chmod(0o600)
     return manifest
 
 

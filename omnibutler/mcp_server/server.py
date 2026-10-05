@@ -26,6 +26,8 @@ Two read/write surfaces sit next to device control:
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import time
@@ -223,9 +225,20 @@ class McpServer:
 
     # -- JSON-RPC plumbing --------------------------------------------------
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
+        # Validate the envelope before touching it: transports feed us
+        # whatever arrived on the wire, and a malformed message must get
+        # a JSON-RPC invalid-request answer, never an AttributeError.
+        if not isinstance(message, dict):
+            return self._error(
+                None, -32600,
+                "invalid request: expected a JSON-RPC object")
         method = message.get("method", "")
         msg_id = message.get("id")
         params = message.get("params") or {}
+        if not isinstance(params, dict):
+            return self._error(
+                msg_id, -32600,
+                "invalid request: 'params' must be an object")
         is_notification = msg_id is None
 
         if method == "initialize":
@@ -242,8 +255,13 @@ class McpServer:
         if method == "tools/list":
             return self._response(msg_id, {"tools": TOOLS})
         if method == "tools/call":
+            arguments = params.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                return self._error(
+                    msg_id, -32602,
+                    "invalid params: 'arguments' must be an object")
             try:
-                result = self._call_tool(params.get("name", ""), params.get("arguments") or {})
+                result = self._call_tool(params.get("name", ""), arguments)
             except OmniButlerError as exc:
                 result = _tool_result({"error": str(exc)}, is_error=True)
             except Exception as exc:  # never crash the transport on a bad call
@@ -412,19 +430,67 @@ def create_server(
                      sessions=sessions, streams=streams)
 
 
+def _write_rpc(stream: TextIO, payload: dict[str, Any]) -> None:
+    stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    stream.flush()
+
+
 def run_stdio(server: McpServer, stdin: TextIO | None = None,
               stdout: TextIO | None = None) -> None:
-    stdin = stdin if stdin is not None else sys.stdin
-    stdout = stdout if stdout is not None else sys.stdout
-    for line in stdin:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        response = server.handle(message)
-        if response is not None:
-            stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-            stdout.flush()
+    """Serve JSON-RPC over stdio, one message per line, until EOF.
+
+    Default streams are re-wrapped from the raw byte buffers as UTF-8:
+    on Windows a text-mode sys.stdin/sys.stdout uses the locale code
+    page, which corrupts (or crashes on) non-ASCII device names in the
+    stream. The stdout wrapper pins ``newline="\\n"`` so responses keep
+    a single LF line ending on every platform. Streams injected by
+    callers (tests) are used exactly as given.
+
+    A malformed line never ends the loop: JSON syntax errors are
+    answered with a -32700 parse error, malformed envelopes with
+    -32600 (from handle), and an unexpected dispatch failure with
+    -32603 - the client can keep talking.
+    """
+    created: list[io.TextIOWrapper] = []
+    if stdin is None:
+        raw_in = getattr(sys.stdin, "buffer", None)
+        if raw_in is not None:
+            stdin = io.TextIOWrapper(raw_in, encoding="utf-8", newline="")
+            created.append(stdin)
+        else:
+            stdin = sys.stdin
+    if stdout is None:
+        raw_out = getattr(sys.stdout, "buffer", None)
+        if raw_out is not None:
+            stdout = io.TextIOWrapper(raw_out, encoding="utf-8",
+                                      newline="\n")
+            created.append(stdout)
+        else:
+            stdout = sys.stdout
+    try:
+        for line in stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError as exc:
+                _write_rpc(stdout, McpServer._error(
+                    None, -32700, f"parse error: {exc}"))
+                continue
+            try:
+                response = server.handle(message)
+            except Exception as exc:  # one bad message must not kill stdio
+                msg_id = (message.get("id")
+                          if isinstance(message, dict) else None)
+                _write_rpc(stdout, McpServer._error(
+                    msg_id, -32603, f"internal error: {exc}"))
+                continue
+            if response is not None:
+                _write_rpc(stdout, response)
+    finally:
+        # Detach the wrappers we created so their teardown cannot
+        # close the process's real stdin/stdout buffers underneath us.
+        for stream in created:
+            with contextlib.suppress(Exception):
+                stream.detach()

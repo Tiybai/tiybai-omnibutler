@@ -32,6 +32,46 @@ class SceneValidationError(ValueError):
     """Raised when a scene file does not match the scene schema."""
 
 
+#: A scene file is hand-authored YAML; anything larger is a mistake
+#: (or a data dump pointed at the wrong loader). Checked before the
+#: file is read into memory.
+MAX_SCENE_FILE_BYTES = 1024 * 1024
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that refuses duplicate mapping keys.
+
+    Stock YAML silently keeps the *last* value of a repeated key, so a
+    scene file with two ``trigger:`` blocks would quietly run only one
+    of them. Here a duplicate is a validation error naming the key.
+    """
+
+
+def _construct_unique_mapping(loader: _UniqueKeyLoader,
+                              node: yaml.MappingNode) -> dict[Any, Any]:
+    loader.flatten_mapping(node)  # resolve merge keys before checking
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=True)
+        try:
+            duplicate = key in mapping
+        except TypeError:
+            raise SceneValidationError(
+                f"mapping key {key!r} is not a usable scalar") from None
+        if duplicate:
+            raise SceneValidationError(
+                f"duplicate key {key!r} in scene mapping - YAML would "
+                f"silently keep only the last value")
+        mapping[key] = loader.construct_object(value_node, deep=True)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
 def _fail(scene_name: str, message: str) -> NoReturn:
     raise SceneValidationError(f"scene {scene_name!r}: {message}")
 
@@ -259,8 +299,18 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
 
 def load_scene_file(path: str | Path) -> Scene:
     path = Path(path)
+    size = path.stat().st_size
+    if size > MAX_SCENE_FILE_BYTES:
+        raise SceneValidationError(
+            f"{path}: scene file is {size} bytes; the limit is "
+            f"{MAX_SCENE_FILE_BYTES} (1 MiB) - a scene is a page of "
+            f"YAML, not a data dump"
+        )
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = yaml.load(path.read_text(encoding="utf-8"),
+                        Loader=_UniqueKeyLoader)
+    except SceneValidationError as exc:
+        raise SceneValidationError(f"{path}: {exc}") from exc
     except yaml.YAMLError as exc:
         raise SceneValidationError(f"{path}: invalid YAML: {exc}") from exc
     scene = parse_scene(raw, source=str(path))

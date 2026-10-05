@@ -57,11 +57,13 @@ def web(engine, manager):
     httpd.server_close()
 
 
-def _request(port, method, path, *, bearer=TOKEN):
+def _request(port, method, path, *, bearer=TOKEN, lang=None):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     headers = {}
     if bearer is not None:
         headers["Authorization"] = f"Bearer {bearer}"
+    if lang is not None:
+        headers["Accept-Language"] = lang
     conn.request(method, path, headers=headers)
     response = conn.getresponse()
     body = response.read().decode("utf-8")
@@ -96,7 +98,7 @@ def test_approvals_page_requires_token(web, engine, manager):
 def test_approvals_page_lists_pending(web, engine):
     item = _seed(engine.confirmations)
 
-    status, body = _request(web, "GET", "/")
+    status, body = _request(web, "GET", "/", lang="zh")
     assert status == 200
     assert item.id in body
     assert "garage_door" in body
@@ -117,7 +119,8 @@ def test_web_approve_executes_and_audits(web, engine, manager):
 
     # Exactly what the page's form does: POST, token in the query string.
     status, body = _request(
-        web, "POST", f"/approve/{item.id}?token={TOKEN}", bearer=None)
+        web, "POST", f"/approve/{item.id}?token={TOKEN}", bearer=None,
+        lang="zh")
     assert status == 200
     assert "已批准并执行" in body
 
@@ -133,7 +136,7 @@ def test_web_approve_executes_and_audits(web, engine, manager):
 def test_web_reject_then_cannot_approve(web, engine, manager):
     item = _seed(engine.confirmations)
 
-    status, body = _request(web, "POST", f"/reject/{item.id}")
+    status, body = _request(web, "POST", f"/reject/{item.id}", lang="zh")
     assert status == 200
     assert "已拒绝" in body
     assert engine.confirmations.get(item.id).status == "rejected"

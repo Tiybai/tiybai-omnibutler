@@ -29,6 +29,8 @@ import os
 import sys
 import threading
 import time
+from collections import deque
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +139,8 @@ class AuditLog:
         self.enabled = enabled
         self.max_bytes, self.keep = retention_from_env(max_bytes, keep)
         self._lock = threading.Lock()
+        #: Lines skipped by the most recent read pass (see iter_entries).
+        self.last_read_skipped = 0
 
     def record(
         self,
@@ -171,12 +175,132 @@ class AuditLog:
                     fh.write(line)
         return entry
 
-    def read_all(self) -> list[dict[str, Any]]:
-        """Every retained entry, oldest first, spanning rotated backups."""
-        entries = []
+    def iter_entries(self) -> Iterator[dict[str, Any]]:
+        """Stream every retained entry, oldest first, one line at a time.
+
+        A full retained log is tens of megabytes; slurping it whole (the
+        old read_all) cost hundreds of MB of RAM to answer questions
+        like "the last 20 entries". This generator reads each rotated
+        file line by line instead, so memory stays flat no matter how
+        large the log grows.
+
+        A line that fails to parse - the torn tail of a write cut off
+        mid-line, say by a kill - is skipped and counted, the same
+        tolerance streams.py applies to its file; one bad line must not
+        make the whole history unreadable. The count lands in
+        ``last_read_skipped`` (reset when a pass starts, final once the
+        iterator is exhausted) and, when non-zero, is also announced on
+        stderr at the end of the pass - damage is never silent. Files
+        are decoded with ``errors="replace"`` so a write torn in the
+        middle of a multi-byte character degrades to one skipped line
+        instead of a UnicodeDecodeError killing the whole read.
+        """
+        self.last_read_skipped = 0
+        skipped = 0
         for path in rotated_paths(self.path, self.keep):
-            for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                handle = path.open(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            with handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entry = self._parse_line(line)
+                    if entry is None:
+                        skipped += 1
+                        continue
+                    yield entry
+        self.last_read_skipped = skipped
+        self._report_skipped(skipped)
+
+    @staticmethod
+    def _parse_line(line: str) -> dict[str, Any] | None:
+        """One log line -> its entry dict, or None when the line is torn."""
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            return None
+        return entry if isinstance(entry, dict) else None
+
+    def _report_skipped(self, skipped: int) -> None:
+        if skipped:
+            print(
+                f"omnibutler: audit log {self.path}: skipped {skipped} "
+                "unparseable line(s) (torn write?)",
+                file=sys.stderr,
+            )
+
+    @staticmethod
+    def _count_lines(path: Path) -> int:
+        """Line count of one file, counted raw without decoding it."""
+        try:
+            count = 0
+            last_byte = b"\n"
+            with path.open("rb") as fh:
+                while chunk := fh.read(1 << 20):
+                    count += chunk.count(b"\n")
+                    last_byte = chunk[-1:]
+            if last_byte != b"\n":
+                count += 1  # a final line missing its newline (torn tail)
+            return count
+        except OSError:
+            return 0
+
+    def tail(self, count: int) -> tuple[list[dict[str, Any]], int]:
+        """The newest ``count`` entries (oldest first) and the log's size.
+
+        Built for "show me the last few" readers: the retained files
+        are walked newest-first and parsing stops as soon as ``count``
+        entries are collected, so the cost tracks ``count`` - not the
+        tens of megabytes of history in front of it. Files beyond the
+        collection point are not even decoded, only line-counted. The
+        second return value is that total retained line count; it
+        equals the entry count on any log whose lines all parse, which
+        is every line record() finished writing. Torn lines met while
+        collecting the tail are skipped and reported exactly as in
+        :meth:`iter_entries`.
+        """
+        self.last_read_skipped = 0
+        collected: deque[dict[str, Any]] = deque(maxlen=max(count, 0))
+        skipped = 0
+        total = 0
+        paths = rotated_paths(self.path, self.keep)
+        for path in reversed(paths):
+            if len(collected) >= count:
+                total += self._count_lines(path)
+                continue
+            try:
+                lines = path.read_text(
+                    encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            total += len(lines)
+            # This file may hold part of the tail: parse from its end.
+            # (Files are size-capped, so holding one file's lines is
+            # bounded by the cap, never by the whole log.)
+            for line in reversed(lines):
                 line = line.strip()
-                if line:
-                    entries.append(json.loads(line))
-        return entries
+                if not line:
+                    continue
+                entry = self._parse_line(line)
+                if entry is None:
+                    skipped += 1
+                    continue
+                collected.appendleft(entry)
+                if len(collected) >= count:
+                    break
+        self.last_read_skipped = skipped
+        self._report_skipped(skipped)
+        return list(collected), total
+
+    def read_all(self) -> list[dict[str, Any]]:
+        """Every retained entry, oldest first, spanning rotated backups.
+
+        Kept for callers that genuinely need the whole history as a
+        list; it is exactly ``list(iter_entries())``, torn lines
+        included in the skip count. New readers that only need a tail
+        or a filtered pass should iterate instead of materialising.
+        """
+        return list(self.iter_entries())

@@ -274,7 +274,7 @@ class _XiaomiCloudClient:
         alongside it. An HTTP 401 (the documented dead-session
         signal) drops the session, re-logs in and retries once.
         """
-        data_str = json.dumps({"params": params})
+        data_str = json.dumps({"params": params}, ensure_ascii=False)
         for attempt in (0, 1):
             self._ensure_session()
             nonce = _xiaomi_nonce()

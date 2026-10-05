@@ -75,6 +75,10 @@ KIND_BAD_RESPONSE = "bad_response"
 _KINDS = (KIND_AUTH_FAILED, KIND_NEEDS_HUMAN, KIND_NETWORK, KIND_BAD_RESPONSE)
 
 _HTTP_TIMEOUT = 15.0
+#: Vendor answers are small JSON documents; a body past this is a
+#: broken (or hostile) endpoint, not data. Reads are bounded so a
+#: peer cannot make the bridge buffer an unbounded response.
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -136,6 +140,24 @@ def _headers_to_dict(message: Any) -> dict[str, str]:
     return out
 
 
+def _read_limited(stream: Any) -> str:
+    """Read a response body with a hard cap; oversize is bad_response.
+
+    Reads one byte past the cap so an oversize body is *detected* and
+    refused rather than silently truncated (a truncated JSON document
+    could parse into wrong data downstream).
+    """
+    data = stream.read(MAX_RESPONSE_BYTES + 1)
+    if len(data) > MAX_RESPONSE_BYTES:
+        raise CloudKeyError(
+            KIND_BAD_RESPONSE,
+            "the server's answer is over "
+            f"{MAX_RESPONSE_BYTES // (1024 * 1024)} MiB; refusing to "
+            "process it.",
+        )
+    return data.decode("utf-8", errors="replace")
+
+
 def _urllib_http(
     method: str,
     url: str,
@@ -157,13 +179,13 @@ def _urllib_http(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return HttpResponse(
                 status=response.status,
-                text=response.read().decode("utf-8", errors="replace"),
+                text=_read_limited(response),
                 headers=_headers_to_dict(response.headers),
             )
     except urllib.error.HTTPError as exc:
         return HttpResponse(
             status=exc.code,
-            text=exc.read().decode("utf-8", errors="replace"),
+            text=_read_limited(exc),
             headers=_headers_to_dict(exc.headers),
         )
 
@@ -636,8 +658,9 @@ def fetch_tuya_local_keys(
         )
     client.access_token = str(token_info["access_token"])
 
-    listed = client.get(f"/v1.0/users/{uid}/devices",
-                        what="Tuya device list")
+    listed = client.get(
+        f"/v1.0/users/{urllib.parse.quote(str(uid), safe='')}/devices",
+        what="Tuya device list")
     if isinstance(listed, dict):
         listed = listed.get("devices") or listed.get("list")
     if not isinstance(listed, list):
@@ -653,8 +676,9 @@ def fetch_tuya_local_keys(
         device_id = entry.get("id") or entry.get("device_id")
         if not device_id:
             continue
-        detail = client.get(f"/v1.0/devices/{device_id}",
-                            what=f"Tuya device {device_id}")
+        detail = client.get(
+            f"/v1.0/devices/{urllib.parse.quote(str(device_id), safe='')}",
+            what=f"Tuya device {device_id}")
         if not isinstance(detail, dict):
             continue
         local_key = detail.get("local_key") or entry.get("local_key")

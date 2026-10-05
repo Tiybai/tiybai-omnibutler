@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,22 @@ def parse_value(text: str) -> Any:
         return text
 
 
+_ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _clean(text: Any) -> str:
+    """Strip ANSI escapes and control characters from a printed label.
+
+    Device names and room names come from config files, vendor clouds
+    and discovery traffic - all outside this process. Printing them raw
+    would let a crafted name inject terminal escape sequences (or fake
+    line breaks) into the operator's terminal, so every label the CLI
+    prints from device data goes through here.
+    """
+    return _CONTROL_CHARS.sub("", _ANSI_ESCAPE.sub("", str(text)))
+
+
 def _print_devices(devices, show_state: bool = False) -> None:
     if not devices:
         print("(no devices)")
@@ -74,7 +92,8 @@ def _print_devices(devices, show_state: bool = False) -> None:
         if not device.online:
             flags.append("offline")
         caps = ", ".join(sorted(device.properties))
-        print(f"{device.id:<18} {device.name:<22} room={device.room:<12} "
+        print(f"{device.id:<18} {_clean(device.name):<22} "
+              f"room={_clean(device.room):<12} "
               f"driver={device.driver:<13} [{caps}] {' '.join(flags)}")
         if show_state:
             print(f"{'':<18} state: {json.dumps(device.state, ensure_ascii=False)}")
@@ -91,7 +110,8 @@ def cmd_state(args) -> int:
     runtime = build_runtime(driver=args.driver, audit_path=args.audit)
     device = runtime.manager.get_device(args.device_id)
     state = runtime.manager.get_state(args.device_id)
-    print(f"{device.name} ({device.id}) room={device.room} risk={device.risk.value}")
+    print(f"{_clean(device.name)} ({device.id}) room={_clean(device.room)} "
+          f"risk={device.risk.value}")
     for key in sorted(state):
         print(f"  {key} = {state[key]!r}")
     return 0
@@ -319,21 +339,45 @@ def cmd_audit(args) -> int:
     if not log.path.exists():
         print(f"(no audit log yet at {log.path})")
         return 0
-    entries = log.read_all()  # spans the rotated backups, oldest first
-    total = len(entries)
-    if args.device:
-        entries = [e for e in entries if e.get("device") == args.device]
-    if args.action:
-        entries = [e for e in entries if e.get("action") == args.action]
-    shown = entries[-args.last:]
+    if not args.device and not args.action:
+        # Fast path for the common "show the last few" question: the
+        # log's tail is collected newest-first without parsing the
+        # (potentially tens of MB of) history in front of it.
+        shown, total = log.tail(args.last)
+        if not shown:
+            print("(audit log is empty)")
+            return 0
+        for entry in shown:
+            print(_format_audit_entry(entry))
+        if len(shown) < total:
+            print(f"({len(shown)} shown of {total} matching, "
+                  f"{total} total; raise --last to see more)")
+        return 0
+    # Filtered reads stream the log (it spans the rotated backups,
+    # oldest first) and keep only the tail the user asked for: a full
+    # log is tens of MB, and materialising it all to print 20 lines was
+    # the slowest, most memory-hungry path in the CLI. Totals are
+    # counted on the same single pass for the summary line.
+    total = 0
+    matching = 0
+    tail: deque = deque(maxlen=args.last)
+    for entry in log.iter_entries():
+        total += 1
+        if args.device and entry.get("device") != args.device:
+            continue
+        if args.action and entry.get("action") != args.action:
+            continue
+        matching += 1
+        tail.append(entry)
+    shown = list(tail)
     if not shown:
         print("(audit log is empty)" if total == 0
               else f"(no audit entries match; the log holds {total})")
         return 0
     for entry in shown:
         print(_format_audit_entry(entry))
-    if len(shown) < len(entries) or len(entries) < total:
-        print(f"({len(shown)} shown of {len(entries)} matching, "
+    if len(shown) < matching or matching < total:
+        print(f"({len(shown)} shown of {matching} matching, "
               f"{total} total; raise --last to see more)")
     return 0
 
@@ -743,7 +787,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_restore)
 
     p = sub.add_parser("setup", help="plain-language guide to getting a device key")
-    p.add_argument("brand", choices=["miio", "xiaomi", "tuya", "ha", "homeassistant"])
+    # Choices come from the guide registry itself, so a topic the CLI
+    # accepts always has a guide (and every guide stays reachable).
+    from omnibutler.setup_guide import guide_topics
+
+    p.add_argument("brand", choices=guide_topics())
     p.set_defaults(func=cmd_setup)
 
     p = sub.add_parser("setup-secret", help="store a device key in the local config (hidden input)")
@@ -797,6 +845,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # Filesystem / socket trouble (state dir gone, disk full,
+        # broken pipe): report it like any other failure instead of
+        # dumping a traceback on the operator.
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
