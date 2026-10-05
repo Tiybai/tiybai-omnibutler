@@ -12,12 +12,10 @@ never echoed back, nothing printed, nothing uploaded.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
-from omnibutler.config import ConfigError
+from omnibutler.config import ConfigError, save_config
 
 _MIIO_GUIDE = """\
 小米设备（miIO token）—— 自己动手拿钥匙，全程在你自己的设备上
@@ -359,18 +357,7 @@ def store_secret(config_path: str | Path, key_path: str, value: str) -> None:
     else:  # pragma: no cover - _descend guarantees a container
         raise ConfigError(f"cannot store a secret at {key_path!r}")
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".config-", suffix=".tmp")
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
-            fh.write("\n")
-        os.replace(tmp_name, path)
-        os.chmod(path, 0o600)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    # Write through the canonical config writer: it stamps the format
+    # version, keeps the one-time .bak of a pre-versioning file, and
+    # writes atomically with mode 0600.
+    save_config(path, data)

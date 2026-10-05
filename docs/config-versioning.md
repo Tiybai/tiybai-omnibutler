@@ -105,12 +105,8 @@ Landed, in `omnibutler/config.py` unless noted otherwise:
 - Covered by `tests/test_config_versioning.py` and the config-version
   cases in `tests/test_doctor_new_checks.py`.
 
-One wiring step remains: the older direct writers -
-`setup_guide.store_secret` and the config merge in the CLI
-(`fetch-keys --store`) - still write the file with their own code.
-They behave correctly today (version 1 needs no migration and readers
-treat a missing version as 1), but they should switch to
-`config.save_config` so the version stamp and backup rules apply to
-every write; that switch touches files outside the v0.5 doctor/config
-change and is tracked as the follow-up. `config.example.json` should
-likewise gain a top-level `"version": 1` to match the rule above.
+Update (v0.5.1): that wiring step is done - `setup_guide.store_secret`
+and the CLI config merge (`fetch-keys --store`) now both write through
+`config.save_config`, so the version stamp and the one-time backup
+apply to every config write; `config.example.json` carries the
+top-level `"version": 1` as well.

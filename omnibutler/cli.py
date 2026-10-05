@@ -365,11 +365,11 @@ def _merge_config_devices(section: str, entries: list[dict]) -> Path:
             devices[by_key[key]].update(entry)
         else:
             devices.append(entry)
-    tmp = config_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                   encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(config_path)
+    # Write through the canonical config writer (version stamp,
+    # one-time .bak of a pre-versioning file, atomic 0600).
+    from omnibutler.config import save_config
+
+    save_config(config_path, data)
     return config_path
 
 
