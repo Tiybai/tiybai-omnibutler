@@ -153,7 +153,7 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.10 (this release) - the audit round: four independent audits
+v0.10.1 (this release) - the audit round: four independent audits
 (cross-platform, security and concurrency, data layer and
 performance, docs and UI alignment) went over the whole codebase,
 and every finding was fixed or consciously accepted. The
@@ -172,8 +172,14 @@ approvals page follows your browser language (Chinese or English)
 and works properly on a phone screen. CI now also runs on Windows
 and macOS runners, and `tob setup` finally lists every guide it
 actually has - five topics were unreachable from the command line.
-Real-hardware verification moves to v0.11 - it still needs owners
-of real devices (issues #2 and #4).
+The .1 patch fixes what the first Windows and macOS CI runs caught
+(a Python 3.13 threading collision in the miio test fakes, a few
+POSIX-only test assumptions, and a gitleaks allowlist that only
+worked in local scans) plus an upstream breakage: python-broadlink
+1.0 now requires Python 3.13 and its old releases are gone from
+PyPI, so the Broadlink extra skips itself on older Pythons instead
+of failing the whole install. Real-hardware verification moves to
+v0.11 - it still needs owners of real devices (issues #2 and #4).
 
 v0.9 - the final sweep: scenes gain delayed actions
 (`- delay: 300` - a light that turns itself off, a vacuum that starts

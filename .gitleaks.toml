@@ -1,8 +1,14 @@
 # Gitleaks configuration for Tiybai OmniButler.
-# Extends the built-in ruleset; the only allowlist entries are known
-# test fixtures (sequential dummy tokens in fake device data), pinned
-# by path AND fingerprint so a real secret in the same files still
-# fails the scan.
+# Extends the built-in ruleset; the only allowlist entry covers known
+# test fixtures (sequential dummy tokens in fake device data). It is
+# pinned by path AND rule AND the exact dummy values, so a real secret
+# in the same files still fails the scan.
+#
+# History: this used to pin line-number fingerprints. Those silently
+# stopped matching whenever the files shifted by a line, and the
+# short form never matches git-history scans at all (history findings
+# carry a commit-prefixed fingerprint) - the CI secrets job failed
+# for releases v0.7-v0.10 while local dir scans stayed green.
 
 [extend]
 useDefault = true
@@ -11,11 +17,14 @@ useDefault = true
 description = "Test fixture tokens (fake device data in tests)"
 condition = "AND"
 paths = [
+  "tests/test_cli_smoke.py",
   "tests/test_cloud_keys.py",
   "tests/test_miio_driver.py",
 ]
-fingerprints = [
-  "tests/test_cloud_keys.py:generic-api-key:92",
-  "tests/test_cloud_keys.py:generic-api-key:107",
-  "tests/test_miio_driver.py:generic-api-key:26",
+rules = ["generic-api-key"]
+regexes = [
+  "^00112233445566778899aabbccddeeff$",
+  "^ffeeddccbbaa99887766554433221100$",
+  "^0123456789abcdef0123456789abcdef$",
+  "^0123456789abcdef$",
 ]

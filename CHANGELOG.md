@@ -8,6 +8,37 @@ For the full release notes, see
 Every driver below is tested against fake devices unless noted otherwise -
 real-hardware verification is still the project's open gap.
 
+## [0.10.1] - 2026-10-05
+
+Patch release: makes the new platform CI green and absorbs an
+upstream breakage. No behaviour changes for existing setups.
+
+### Fixed
+- Python 3.13 test failure: `threading.Thread` grew an internal
+  `_handle` attribute in 3.13, which shadowed the miio test fake's
+  own `_handle()` method - every fake-device roundtrip timed out.
+  Renamed to `_handle_packet`; the full suite passes on 3.13.
+- macOS test failure: the miio fake's connected-peer-socket reply
+  trick does not demux on BSD sockets. The fake now replies via
+  plain `sendto` (what a real device does) and only falls back to
+  the peer socket where unconnected sends are refused.
+- Windows test failures: POSIX file-mode assertions are now
+  POSIX-only (Windows chmod cannot express 0600; the platform doc
+  already states Windows relies on ACLs), and the missing-fchmod
+  simulation no longer assumes the attribute exists to delete.
+- CI secrets job had failed since v0.7: the gitleaks allowlist
+  pinned line-number fingerprints, which never match git-history
+  scans and silently rot when files shift. It now pins the exact
+  dummy values (anchored) + path + rule; verified in history mode
+  in both directions (fixtures pass, changed values still fail).
+- Upstream breakage: `python-broadlink` 1.0 requires Python >= 3.13
+  and all older releases were removed from PyPI, so
+  `pip install tiybai-omnibutler[broadlink]` (or `[all]`) failed
+  outright on Python 3.11/3.12. The extra now carries a
+  `python_version >= '3.13'` marker: older Pythons install
+  everything else and the driver reports itself unavailable. The
+  CI license gate moved to 3.13 so broadlink is still audited.
+
 ## [0.10.0] - 2026-10-05
 
 The audit round: four independent audits (cross-platform, security

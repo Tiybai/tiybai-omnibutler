@@ -8,6 +8,7 @@ secret value may ever appear in a check result, a report, or an error.
 """
 
 import json
+import os
 import re
 import stat
 import urllib.error
@@ -157,7 +158,8 @@ def test_device_entries_resolve_env_refs():
 def test_store_secret_creates_0600_and_nested_lists(tmp_path):
     path = tmp_path / "nested" / "config.json"
     store_secret(path, "miio.devices.0.token", "ab" * 16)
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name == "posix":  # Windows chmod cannot express 0600 (ACLs instead)
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["miio"]["devices"][0]["token"] == "ab" * 16
 
@@ -165,7 +167,8 @@ def test_store_secret_creates_0600_and_nested_lists(tmp_path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["tuya"]["devices"][1]["local_key"] == "key-2"
     assert data["miio"]["devices"][0]["token"] == "ab" * 16  # preserved
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_store_secret_replaces_without_keeping_old_value(tmp_path):

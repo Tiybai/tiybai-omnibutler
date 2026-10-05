@@ -318,7 +318,7 @@ def test_stale_tmp_files_from_dead_writers_are_cleaned(tmp_path):
 def test_save_config_survives_missing_fchmod(tmp_path, monkeypatch):
     # Windows' os module has no fchmod; deleting it here stands in for
     # that platform, where save_config used to crash on every save.
-    monkeypatch.delattr(os, "fchmod")
+    monkeypatch.delattr(os, "fchmod", raising=False)
     target = tmp_path / "config.json"
     save_config(target, {"ha": {"url": "http://192.168.1.10:8123"}})
     assert load_config(target)["ha"]["url"] == "http://192.168.1.10:8123"

@@ -34,6 +34,12 @@ pip install ".[homeassistant]" # Home Assistant event stream (WebSocket)
 pip install ".[all]"       # everything
 ```
 
+One exception: the Broadlink extra needs Python 3.13 or newer.
+Upstream `python-broadlink` 1.0 dropped older Pythons and removed
+its old releases from PyPI, so on Python 3.11/3.12 the extra
+installs everything else and the Broadlink driver simply reports
+itself unavailable until upstream ships a compatible build.
+
 First steps:
 
 ```bash

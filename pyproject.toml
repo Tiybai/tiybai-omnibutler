@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tiybai-omnibutler"
-version = "0.10.0"
+version = "0.10.1"
 description = "Tiybai OmniButler - an open smart-device bridge that lets AI agents (Muse, OpenClaw, Hermes) control smart devices via MCP."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -29,7 +29,11 @@ dependencies = ["PyYAML>=6.0"]
 dev = ["pytest>=8.0", "pytest-cov>=5.0", "cryptography>=41.0"]
 miio = ["cryptography>=41.0"]
 tuya = ["tinytuya>=1.13"]
-broadlink = ["python-broadlink"]
+# python-broadlink 1.0 requires Python >= 3.13 and upstream removed
+# every older release from PyPI, so on 3.11/3.12 the marker below
+# skips it (install succeeds; the Broadlink driver then reports
+# itself unavailable like any other missing optional dependency).
+broadlink = ["python-broadlink>=1.0; python_version >= '3.13'"]
 midea = ["msmart-ng"]
 matter = ["websockets>=12.0"]
 zigbee = ["paho-mqtt>=1.6"]
@@ -39,7 +43,7 @@ homeassistant = ["websockets>=12.0"]
 all = [
     "cryptography>=41.0",
     "tinytuya>=1.13",
-    "python-broadlink",
+    "python-broadlink>=1.0; python_version >= '3.13'",
     "msmart-ng",
     "websockets>=12.0",
     "paho-mqtt>=1.6",

@@ -38,7 +38,7 @@ class FakeVacuum(FakeMiioDevice):
         self.requests = []  # (method, params) of every decrypted request
         self.action_code = 0  # per-item result code for action calls
 
-    def _handle(self, data):
+    def _handle_packet(self, data):
         if len(data) > 32:
             header, check, ciphertext = data[:16], data[16:32], data[32:]
             if hashlib.md5(header + self.token + ciphertext).digest() == check:
@@ -48,7 +48,7 @@ class FakeVacuum(FakeMiioDevice):
                     (request.get("method"), request.get("params")))
                 if request.get("method") == "action":
                     return self._handle_action(request)
-        return super()._handle(data)
+        return super()._handle_packet(data)
 
     def _handle_action(self, request):
         result = []

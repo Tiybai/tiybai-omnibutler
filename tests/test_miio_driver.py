@@ -50,11 +50,15 @@ def _crypt(token: bytes, data: bytes, encrypt: bool) -> bytes:
 class FakeMiioDevice(threading.Thread):
     """A miIO device on 127.0.0.1 with an ephemeral port, per the spec.
 
-    Sandbox note: the environment these tests run in refuses unconnected
-    UDP sends, so replies cannot leave via ``sendto`` on the listening
-    socket. Instead each peer gets a connected reply socket bound to the
-    same port (SO_REUSEADDR), which also takes over that peer's later
-    packets - the wire behaviour a real device shows is unchanged.
+    Replies normally leave via ``sendto`` on the listening socket -
+    exactly what a real device does. One sandbox these tests run in
+    refuses unconnected UDP sends, so if ``sendto`` raises OSError the
+    fake falls back to a connected reply socket per peer (bound to the
+    same port with SO_REUSEADDR, which then also takes over that
+    peer's later packets). The fallback is only a fallback: on BSD /
+    macOS, same-port demux does not hand packets to the connected
+    socket the way Linux does, so sendto must win wherever it works.
+    The wire behaviour a real device shows is unchanged either way.
     """
 
     def __init__(self, token_hex: str, device_id: int, store: dict, model: str):
@@ -71,6 +75,7 @@ class FakeMiioDevice(threading.Thread):
         self._boot = time.monotonic()
         self._running = True
         self._peers: dict[tuple, socket.socket] = {}
+        self._sendto_ok: bool | None = None  # decided on first reply
 
     def _stamp(self) -> int:
         return 4242 + int(time.monotonic() - self._boot)
@@ -102,7 +107,7 @@ class FakeMiioDevice(threading.Thread):
                 data = peer.recv(4096)
             except OSError:
                 return
-            reply = self._handle(data)
+            reply = self._handle_packet(data)
             if reply is not None:
                 try:
                     peer.send(reply)
@@ -110,9 +115,16 @@ class FakeMiioDevice(threading.Thread):
                     return
 
     def _dispatch(self, data: bytes, addr) -> None:
-        reply = self._handle(data)
+        reply = self._handle_packet(data)
         if reply is None:
             return
+        if self._sendto_ok is not False:
+            try:
+                self.sock.sendto(reply, addr)
+                self._sendto_ok = True
+                return
+            except OSError:
+                self._sendto_ok = False  # this environment refuses; fall back
         with contextlib.suppress(OSError):
             self._peer_socket(addr).send(reply)
 
@@ -122,7 +134,7 @@ class FakeMiioDevice(threading.Thread):
             peer.close()
         self.sock.close()
 
-    def _handle(self, data: bytes):
+    def _handle_packet(self, data: bytes):
         # Hello probe: 32 bytes, length field 32, everything after the
         # length field 0xFF (spec: docs/specs/miio-protocol.md).
         if len(data) == 32 and data[4:] == b"\xff" * 28:

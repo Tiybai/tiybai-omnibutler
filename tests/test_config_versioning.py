@@ -8,6 +8,7 @@ backup before the first write-back of a pre-versioning file.
 """
 
 import json
+import os
 import stat
 from pathlib import Path
 
@@ -110,7 +111,8 @@ def test_save_config_stamps_version_and_0600(tmp_path):
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["version"] == CURRENT_CONFIG_VERSION
     assert written["ha"]["url"] == "http://192.168.1.10:8123"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name == "posix":  # Windows chmod cannot express 0600 (ACLs instead)
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert "version" not in data  # the caller's dict is not mutated
 
 
