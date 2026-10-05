@@ -1,9 +1,8 @@
 # Config file versioning - design note
 
-Status: **design only, not yet implemented.** This document describes the
-current state honestly and the v1 plan, so a future change to the config
-format has a migration path instead of silently breaking everyone's
-`~/.omnibutler/config.json`.
+Status: **implemented in v0.5** - see the implementation status section
+at the end of this document. The design below is the original plan and
+is unchanged.
 
 ## Where we are today (v0.3.x)
 
@@ -80,3 +79,38 @@ on.
   if they ever need it, they get separate version keys, not this one.
 - Encrypting the config at rest. Secrets already live in environment
   variables by reference; the file itself is 0600.
+
+## Implementation status (v0.5)
+
+Landed, in `omnibutler/config.py` unless noted otherwise:
+
+- `CURRENT_CONFIG_VERSION = 1` and `config_version(data)`: a missing
+  `version` reads as 1; a non-integer, below-1, or newer-than-current
+  version is a hard `ConfigError` ("written by a newer OmniButler,
+  please upgrade"), raised by `load_config` before anything else
+  touches the config.
+- `MIGRATIONS` registry + `migrate_config(data)`: the loader walks
+  the chain in memory on the raw parsed dict (before any `env:`
+  resolution). The registry is empty at version 1; the first format
+  bump registers its step there.
+- `save_config(path, data)`: the versioned write path - stamps
+  `version`, writes atomically with mode 0600, and keeps the one-time
+  backup (`config.json.v1.bak`, never overwritten) before the first
+  write-back of a file that predates the current format. Loading still
+  never rewrites the file.
+- Doctor: `tob doctor` has a `config-version` line reporting the
+  version found, whether it is current, and - for a too-new config -
+  the same refusal explanation the loader gives.
+  (In `omnibutler/doctor.py`.)
+- Covered by `tests/test_config_versioning.py` and the config-version
+  cases in `tests/test_doctor_new_checks.py`.
+
+One wiring step remains: the older direct writers -
+`setup_guide.store_secret` and the config merge in the CLI
+(`fetch-keys --store`) - still write the file with their own code.
+They behave correctly today (version 1 needs no migration and readers
+treat a missing version as 1), but they should switch to
+`config.save_config` so the version stamp and backup rules apply to
+every write; that switch touches files outside the v0.5 doctor/config
+change and is tracked as the follow-up. `config.example.json` should
+likewise gain a top-level `"version": 1` to match the rule above.

@@ -88,7 +88,9 @@ def test_mcp_initialize_and_tools_list(mcp_server):
     # a human-only, out-of-band step (`tob confirm <id>` on the host).
     assert names == {"list_devices", "get_device_state", "set_device_property",
                      "call_device_action", "list_scenes", "enable_scene",
-                     "get_pending_confirmations"}
+                     "get_pending_confirmations", "list_data_streams",
+                     "get_stream_data", "list_terminal_sessions",
+                     "open_terminal_session", "close_terminal_session"}
 
 
 def _call(mcp_server, name, arguments):
@@ -148,4 +150,4 @@ def test_mcp_stdio_smoke():
     assert init["result"]["serverInfo"]["name"] == "tiybai-omnibutler"
     names = {t["name"] for t in listing["result"]["tools"]}
     assert "list_devices" in names and "confirm_action" not in names
-    assert len(names) == 7
+    assert len(names) == 12

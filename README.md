@@ -27,7 +27,7 @@ sits in the middle:
   points, Matter clusters and Home Assistant domains into one vocabulary:
   `onoff`, `target_temperature`, `pm25`, `position`, ...
 - **One agent interface** - a dependency-free MCP server (stdio, plus an
-  optional token-authenticated HTTP transport) with seven tools. Any MCP
+  optional token-authenticated HTTP transport) with twelve tools. Any MCP
   client can use it. Note there is deliberately no "approve" tool:
   confirmations are human-only, from a terminal on the host.
 - **Scenes that run without the AI** - YAML rules (trigger + conditions +
@@ -144,20 +144,21 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.4 (this release) - the bridge grows past the living room. New:
-a Matter driver (controller-client mode: it talks to a running
-matterjs-server / python-matter-server over WebSocket; commissioning
-codes are forwarded to the controller, never faked locally), Zigbee
-via Zigbee2MQTT over MQTT, a phone gateway (`tob gateway`: tokened
-HTTP ingest for read-only data streams like health and location,
-plus geofence events that fire scenes), terminal sessions for
-wearables (a smart-glasses demo terminal the AI can speak and display
-through; scenes can trigger on session open/close), one-pass
-discovery (`tob onboard`) and cloud key fetching (`tob fetch-keys`),
-and distribution packaging (Docker, launchd/systemd units - see
-docs/install.md). All drivers, old and new, are tested against fake
-devices; **none are verified on real hardware yet** - that is still
-the project's biggest gap, and issue #4 is where it gets closed.
+v0.5 (this release) - the completeness pass: nothing half-wired is
+left. The MCP surface now covers data streams and terminal sessions
+(12 tools); the phone gateway can run inside the daemon
+(`tob run --gateway`, one process, scenes fire exactly once);
+`tob doctor` also checks the Matter controller and Zigbee2MQTT
+broker for reachability and reports config-version health; config
+files are versioned (missing version = v1, newer-than-supported is
+a hard error, first rewrite keeps a one-time .bak); a Tuya cloud
+fallback driver (`--driver tuya_cloud`) controls devices through
+the vendor cloud when no local path exists - it is deliberately
+*not* part of `all`, going cloud is always an explicit choice; and
+`tob setup` now has plain-language guides for matter, zigbee2mqtt,
+gateway and tuya_cloud. Everything is still tested against fake
+devices only - **real-hardware verification remains the project's
+biggest gap** (issues #2 and #4).
 
 - [x] v0.2 - first real local drivers behind clean-room specs; device-data
       contributions open
@@ -166,10 +167,13 @@ the project's biggest gap, and issue #4 is where it gets closed.
 - [x] v0.4 - Matter (controller client) + Zigbee2MQTT drivers; phone
       gateway + data streams; terminal sessions; onboard scan +
       cloud key fetch; Docker/service packaging
-- [ ] v0.5 - real-hardware verification round (needs owners of real
+- [x] v0.5 - MCP streams/sessions tools; gateway inside the daemon;
+      doctor for the new drivers; config versioning live; Tuya cloud
+      fallback driver; setup guides for all drivers
+- [ ] v0.6 - real-hardware verification round (needs owners of real
       devices - see issues #2 and #4)
-- [ ] Later - PyPI release; vendor-cloud control fallbacks where no
-      local path exists
+- [ ] Later - PyPI release (needs the maintainer's PyPI account);
+      vendor-cloud fallbacks for more brands where no local path exists
 
 ## Contributing a device
 

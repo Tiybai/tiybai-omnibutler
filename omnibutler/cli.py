@@ -249,10 +249,16 @@ def cmd_run(args) -> int:
         else:
             print("note: --notify needs macOS; dialogs are unavailable on "
                   f"{_sys.platform}, continuing without popups")
+    if args.gateway:
+        print(f"phone gateway: http://{args.gateway_host}:{args.gateway_port}/ "
+              f"(token from $OMNIBUTLER_GATEWAY_TOKEN; without it the "
+              f"gateway stays off and the daemon keeps running)")
     try:
         stats = run_daemon(runtime, poll_interval=args.poll,
                            approvals_port=args.approvals_port,
-                           approvals_host=args.host, notify=args.notify)
+                           approvals_host=args.host, notify=args.notify,
+                           gateway_port=args.gateway_port if args.gateway else 0,
+                           gateway_host=args.gateway_host)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -292,6 +298,30 @@ def cmd_gateway(args) -> int:
     print(f"phone gateway on {args.host}:{args.port} "
           f"(token from $OMNIBUTLER_GATEWAY_TOKEN required)")
     serve(runtime.bus, runtime.streams, host=args.host, port=args.port)
+    return 0
+
+
+def cmd_streams(args) -> int:
+    runtime = build_runtime(driver="mock", load_default_scenes=False)
+    store = runtime.streams
+    if args.stream_id:
+        points = store.history(args.stream_id)
+        if not points:
+            print(f"no data for stream {args.stream_id!r}")
+            return 0
+        for point in points[-args.limit:]:
+            print(f"  {point.ts}  {point.value}")
+        return 0
+    streams = store.streams()
+    if not streams:
+        print("no data streams yet (the phone gateway writes them)")
+        return 0
+    for stream in streams:
+        latest = store.latest(stream.id)
+        latest_text = (f"latest: {latest.value} @ {latest.ts}"
+                       if latest is not None else "no points yet")
+        print(f"  {stream.id} ({stream.kind}, source={stream.source}) "
+              f"{latest_text}")
     return 0
 
 
@@ -519,8 +549,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tob", description="Tiybai OmniButler CLI")
     parser.add_argument("--version", action="version", version=f"tob {__version__}")
     parser.add_argument("--driver", choices=["mock", "homeassistant", "miio",
-                                             "tuya", "broadlink", "midea",
-                                             "matter", "zigbee2mqtt",
+                                             "tuya", "tuya_cloud", "broadlink",
+                                             "midea", "matter", "zigbee2mqtt",
                                              "terminal_mock", "all"],
                         default=None,
                         help="device driver set (default: mock, or $TOB_DRIVER)")
@@ -575,6 +605,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--notify", action="store_true",
                    help="pop a macOS dialog for each new pending confirmation "
                         "(macOS only; noted and skipped elsewhere)")
+    p.add_argument("--gateway", action="store_true",
+                   help="also serve the phone gateway in this process "
+                        "(needs $OMNIBUTLER_GATEWAY_TOKEN; without it the "
+                        "gateway stays off, the daemon keeps running)")
+    p.add_argument("--gateway-host", default="127.0.0.1",
+                   help="bind host for the phone gateway (default 127.0.0.1)")
+    p.add_argument("--gateway-port", type=int, default=8767,
+                   help="port for the phone gateway (default 8767)")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("approvals", help="serve the human approvals web page "
@@ -598,6 +636,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8767)
     p.set_defaults(func=cmd_gateway)
+
+    p = sub.add_parser("streams", help="show data streams collected via the gateway")
+    p.add_argument("stream_id", nargs="?", default=None,
+                   help="show recent points for this stream instead of listing")
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=cmd_streams)
 
     p = sub.add_parser("onboard", help="scan all drivers and report what each found device still needs")
     p.add_argument("--write-draft", default=None, metavar="PATH",

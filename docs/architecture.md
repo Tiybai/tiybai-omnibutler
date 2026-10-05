@@ -59,8 +59,9 @@ confirmation queue instead of executing.
 ### northbound (MCP)
 A dependency-free MCP server (JSON-RPC over stdio, spec 2024-11-05; an
 optional token-authenticated HTTP transport shares the same handler)
-exposing seven tools: device listing/state, property writes, actions,
-scene management, and a read-only view of the confirmation queue. There
+exposing twelve tools: device listing/state, property writes, actions,
+scene management, a read-only view of the confirmation queue, data-stream
+reads, and terminal-session open/close. There
 is deliberately no approve tool - approval happens only from a terminal
 on the host (`tob confirm <id>`). High-risk devices are refused on the
 direct tools - the confirmation queue is the only path.

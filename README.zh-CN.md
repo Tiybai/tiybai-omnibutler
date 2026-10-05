@@ -20,7 +20,7 @@ English version: [README.md](README.md)
   `target_temperature`（目标温度）、`pm25`、`position`（窗帘/门位置）等，
   场景和 AI 不需要懂任何厂商。
 - **统一 Agent 接口** — 一个零依赖的 MCP Server（stdio，外加可选的、带
-  令牌鉴权的 HTTP 传输），7 个工具，任何 MCP 客户端都能接。特意说明：
+  令牌鉴权的 HTTP 传输），12 个工具，任何 MCP 客户端都能接。特意说明：
   工具里**没有**"批准"这一项——确认只能由人在宿主机终端完成。
 - **场景由本地引擎执行** — 场景是 YAML 规则（触发 + 条件 + 动作），由确定性
   引擎在本地运行，断网照跑、结果可预期。AI 负责听懂你的话、编写和调整
@@ -124,24 +124,28 @@ v0.4 新增：`tob onboard` 一次扫遍所有驱动、用大白话说清每台�
 
 ## 状态与路线图
 
-v0.4（本版）：桥走出客厅。新增 Matter 驱动（控制器客户端模式：经
-WebSocket 对接在跑的 matterjs-server / python-matter-server，配对码
-只转发给控制器、本地不假装配网）、经 Zigbee2MQTT 的 Zigbee 驱动、
-手机网关（`tob gateway`：带令牌的 HTTP 接口，收健康/位置等只读数据
-流，地理围栏事件可直接触发场景）、穿戴终端会话（演示智能眼镜：AI 能
-在眼镜上显示文字、出声说话，场景可按会话开启/关闭触发）、一次扫遍
-全部驱动的发现纳管（`tob onboard`）与云取钥（`tob fetch-keys`），
-还有分发打包（Docker、launchd/systemd 常驻模板，见 docs/install.md）。
-所有驱动（新旧）都只用假设备测过，**尚待实机验证**——这是项目目前
-最大的缺口，靠 issue #2 / #4 补。
+v0.5（本版）：补齐轮次——不再留半接线的东西。MCP 补上数据流与
+终端会话工具（共 12 个）；手机网关可以跑进 daemon 里
+（`tob run --gateway`，一个进程、场景只执行一遍）；`tob doctor`
+开始查 Matter 控制器与 Zigbee2MQTT 的可达性、以及配置文件版本
+健康；配置文件正式版本化（没写版本视为 v1、版本比程序新会明确
+报错、首次回写留一次性 .bak 备份）；新增涂鸦云兜底驱动
+（`--driver tuya_cloud`，本地实在走不通时经厂商云控制——故意
+不进 all 组合，走云必须显式选）；`tob setup` 补齐 matter /
+zigbee2mqtt / gateway / tuya_cloud 四份指南。全部仍然只经假
+设备测试——**实机验证还是项目最大的缺口**（见 issue #2 / #4）。
 
 - [x] v0.2 — 按净室规格实现第一批真实本地驱动；开放 device-data 贡献
 - [x] v0.3 — 确认带外化强制执行；daemon；MCP over HTTP；doctor 与
       setup 指南；美的与 Broadlink 驱动
 - [x] v0.4 — Matter（控制器客户端）+ Zigbee2MQTT 驱动；手机网关与
       数据流；终端会话；发现纳管与云取钥；Docker/常驻服务打包
-- [ ] v0.5 — 实机验证轮次（需要有真设备的朋友，见 issue #2 / #4）
-- [ ] 之后 — PyPI 正式发布；无本地通道品类的厂商云兜底控制
+- [x] v0.5 — MCP 数据流/会话工具；网关嵌入 daemon；doctor 覆盖
+      新驱动；配置版本化落地；涂鸦云兜底驱动；全部驱动的
+      setup 指南
+- [ ] v0.6 — 实机验证轮次（需要有真设备的朋友，见 issue #2 / #4）
+- [ ] 之后 — PyPI 正式发布（需要维护者本人的 PyPI 账号）；更多
+      无本地通道品牌的厂商云兜底
 
 ## 贡献设备
 

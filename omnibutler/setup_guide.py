@@ -99,29 +99,199 @@ Home Assistant（长期访问令牌）—— 两分钟，在你自己的 HA 里
 哪天不想用了，在 HA 里把这枚令牌吊销，桥立刻就进不去了。
 """
 
+_MATTER_GUIDE = """\
+Matter 设备 —— 桥不自己配网，它去接一台你已经在跑的 Matter 控制器
+
+这条路和其他驱动不一样：桥本身不当 Matter 控制器。真正管 Matter
+网络的是另一个服务，比如 matterjs-server（Home Assistant 的
+Matter 集成背后也是这一类服务）。桥做的是连上那台控制器，把它管
+的设备翻译成桥的统一模型。所以这条路没有「钥匙」要拿，要准备的
+是：一台已经在跑、设备已经配好对的控制器，和它的地址。
+
+步骤：
+1. 先把 Matter 控制器跑起来（比如 matterjs-server，按它自己的
+   文档安装和启动），确认你的 Matter 设备在控制器那边已经配好
+   对、能正常开关。这一步在控制器那边完成，桥帮不上，也不假装
+   能配网。
+2. 装桥的 Matter 组件（一个 WebSocket 小库），在跑桥的终端里运行：
+   pip install "tiybai-omnibutler[matter]"
+3. 告诉桥控制器在哪：把环境变量 MATTER_SERVER_URL 设成控制器的
+   WebSocket 地址。控制器跑在同一台机器、用默认端口时默认就是
+   ws://127.0.0.1:5580/ws，这一步可以省；控制器在别的机器上，
+   就把地址里的主机和端口换成它的。
+4. （可选）想给设备起顺口的名字和房间，用环境变量
+   MATTER_NODES_JSON 写一份 node 编号到名字/房间的对照清单。这
+   只是标签：设备有什么本事，桥是从控制器现学的，不用你编。
+5. 以后配新设备：配对码是控制器那边生成的（或者看设备/包装上
+   印的配对码），在桥里对一台叫 matter-controller 的「设备」
+   执行 commission 动作，把码递过去——真正执行配对的是
+   控制器，桥只是转发。配好后设备会出现在桥的设备列表里，
+   名字长得像 matter-<编号>-<端点>。
+6. 验证：跑一次健康检查（doctor），或直接列一下设备，能看到
+   Matter 设备就是通了。
+
+记住：控制器连不上时，桥会明确报错，不会装作设备在那儿；
+桥和控制器之间走你的局域网/本机，不经过任何厂商的云。
+"""
+
+_Z2M_GUIDE = """\
+Zigbee 设备 —— 经 Zigbee2MQTT 接入，配对先在那边配好
+
+桥不自己讲 Zigbee 协议。你在家里跑一个 Zigbee2MQTT（插一个
+Zigbee USB 协调器），它把 Zigbee 设备翻译成 MQTT 消息，桥订
+这些消息来认设备、下指令。所以这条路也没有要去哪个平台拿的
+「钥匙」：设备先在 Zigbee2MQTT 里配好对，桥这边只要知道 MQTT
+中转站（broker）的地址就行。
+
+步骤：
+1. 先确认 Zigbee2MQTT 已在跑（按它自己的文档装好、配好协调
+   器），家里的 Zigbee 设备已经在它里面配完对、在它的页面里
+   能开关。
+2. 装桥的 Zigbee 组件，在跑桥的终端里运行：
+   pip install "tiybai-omnibutler[zigbee]"
+3. 告诉桥 broker 在哪：把环境变量 Z2M_MQTT_URL 设成 broker 的
+   地址，形状像 mqtt://192.168.1.10:1883；broker 要账号密码的，
+   写成 mqtt://用户名:密码@192.168.1.10:1883。
+   注意：这个地址里可能带着 broker 的密码，按钥匙对待——只放
+   环境变量，别写进会发给别人看的配置文件，也别贴进聊天里。
+4. （可选）设备可以不预先登记：Zigbee2MQTT 报告过的设备，桥
+   会自动认下来。想固定桥这边的设备 id、名字和房间，在本地
+   配置的 zigbee2mqtt.devices 里按 friendly_name（设备在
+   Zigbee2MQTT 里的名字）登记，或者用环境变量 Z2M_DEVICES_JSON
+   给一份同样的清单；Zigbee2MQTT 的主题前缀改过的话，再设
+   Z2M_BASE_TOPIC。
+5. 验证：跑一次健康检查（doctor），或列一下设备，能看到
+   z2m- 开头的设备；实际开关一次，状态对得上就是通了。
+
+记住：控制链是 桥 → MQTT broker → Zigbee2MQTT → 设备，
+全程在你家局域网里，不走任何厂商的云；哪一环没在跑，桥都会
+明确报连不上，不会装作控制成功了。
+"""
+
+_GATEWAY_GUIDE = """\
+手机网关 —— 不是拿设备钥匙，是给手机开一个往桥里送数据的口
+
+有些数据不在设备上，在你手机里：步数、睡眠、位置。手机网关是
+桥在本机开的一个小接口，手机（或手机上的自动化工具）把数据
+POST 进来：健康这类数据存成一条条数据流，到家/离家这种地理
+围栏事件能直接触发场景。它只收数据，不控制任何设备。
+
+步骤：
+1. 先给网关想一把令牌：自己用密码管理器之类的工具生成一串
+   够长的随机字符串，这就是网关令牌。它和 MCP 的令牌、批准
+   页的口令都是分开的——手机上只存这一把，就算漏了，也只能
+   往桥里灌数据，干不了别的。
+2. 在跑桥的机器上把这把令牌放进环境变量
+   OMNIBUTLER_GATEWAY_TOKEN（只放环境变量，别写进代码、配置
+   文件或聊天里），然后启动：终端里运行 tob gateway，默认
+   只监听本机 127.0.0.1:8767；或者用 tob run --gateway，把
+   网关和常驻的桥跑在同一个进程里（推荐，场景只会执行
+   一遍）。没设令牌时它会拒绝启动，这是故意的。
+3. 手机往哪儿发：两个入口都要在请求头带上
+   Authorization: Bearer <网关令牌>。
+   - 送数据点：POST 到 /ingest，形状是
+     {"stream": {"id": "phone-steps", "kind": "health.steps",
+     "source": "phone", "unit": "count"},
+     "points": [{"ts": 时间戳, "value": 数值}]}
+   - 送事件：POST 到 /event，地理围栏长这样：
+     {"type": "geofence", "zone": "home", "transition": "enter"}
+     （enter 是到家、exit 是离家，会触发对应的场景。）
+   字段细节以网关代码（omnibutler/gateway.py）开头的说明为准。
+4. 手机不在同一局域网时，别把 8767 端口直接暴露到公网：
+   按本项目的规矩，套 Cloudflare Access 或 WireGuard 进来。
+
+记住：令牌只用来比对，桥不会把令牌写进日志。想换令牌就改
+环境变量、重启网关，手机侧同步换掉即可。
+"""
+
+_TUYA_CLOUD_GUIDE = """\
+涂鸦云（两件事：一次性取钥 + 云兜底控制）
+
+先分清涂鸦云在桥里出现的两个地方，别混：
+
+【一】取钥（tob fetch-keys tuya）——云只用这一次
+和 `tob setup tuya` 那篇本地指南是同一件事的两种做法，目标都是
+拿到每台设备的 local_key。区别只在查钥匙的动作：本地指南是你
+在 IoT 平台网页上一台台点开抄；这条是桥拿着你 IoT 项目凭据，
+自己去涂鸦云把所有设备的 local_key 一次查回来。查完之后，
+日常控制照样走家里局域网本地直连，不靠云。
+
+步骤：
+1. 在涂鸦 IoT 平台（iot.tuya.com）用你自己的账号创建一个
+   云项目、关联你的智能生活 / Tuya Smart App 账号。记下项目
+   给的 Access ID 和 Access Secret；再在 IoT 平台项目里找到
+   你账号的 UID（在关联账号/成员相关的页面里，位置写不准，
+   就在项目里找标着 UID 的那串）。
+2. 运行 tob fetch-keys tuya。它会一样样问你（Access Secret
+   输入时不回显）；想免交互，先设好三个环境变量：
+   TUYA_ACCESS_ID、TUYA_ACCESS_SECRET、TUYA_UID。
+3. 命令加上 --store，查回来的 local_key 会按设备合并存进
+   本机配置（权限 0600）。注意涂鸦云不给设备的局域网 IP：
+   存完后照本地指南，把每台设备的 ip 在路由器后台查出来补
+   上，最好顺手绑固定 IP。
+
+【二】云兜底控制（--driver tuya_cloud）——本地实在走不通时才用
+有些设备拿不到 local_key、或者本地协议对不上，还有一条路：
+让桥直接经涂鸦云控制它们（状态读取和开关/亮度/色温控制都
+走云端 API）。先把丑话说前面：这条路依赖厂商云和外网，
+断网、云接口变动都会让它失效；速度和可靠性都不如本地直连。
+所以它只当兜底：桥的 all 组合里故意不包含它，必须你自己
+显式选 --driver tuya_cloud 才会走云，不会不知不觉用上。
+
+配置（二选一）：
+- 环境变量：TUYA_CLOUD_ACCESS_ID、TUYA_CLOUD_ACCESS_SECRET
+  （可选 TUYA_CLOUD_UID——不给时桥会从登录返回里取；
+  可选 TUYA_CLOUD_BASE_URL 换数据中心，默认中国区
+  openapi.tuyacn.com）。用的是同一个 IoT 项目的凭据。
+- 或者写进本机 config.json 的 tuya_cloud 一节：access_id、
+  access_secret 两个字段，值一律用 env: 引用（比如
+  "access_secret": "env:TUYA_CLOUD_ACCESS_SECRET"），
+  配置文件里不落明文。Access Secret 是钥匙级别的东西：
+  只放环境变量或当场输入，别写进聊天，别提交进代码仓库。
+配好后 tob --driver tuya_cloud devices 就能列出云端设备。
+
+两件事共同的提醒：
+- 取钥那一步撞上验证码或两步验证，桥会直接停下，报
+  needs_human_verification——它不会、也不应该替你过验证。
+  这种情况就回本地指南，网页上一台台抄。
+- 云接口失败时桥会把原因分类说清（凭据不对 / 网络问题 /
+  返回异常），不会假装控制成功。
+"""
+
 _GUIDES = {
     "miio": _MIIO_GUIDE,
     "xiaomi": _MIIO_GUIDE,
     "tuya": _TUYA_GUIDE,
+    "tuya_cloud": _TUYA_CLOUD_GUIDE,
+    "tuya-cloud": _TUYA_CLOUD_GUIDE,
     "ha": _HA_GUIDE,
     "homeassistant": _HA_GUIDE,
     "home-assistant": _HA_GUIDE,
+    "matter": _MATTER_GUIDE,
+    "zigbee2mqtt": _Z2M_GUIDE,
+    "zigbee": _Z2M_GUIDE,
+    "z2m": _Z2M_GUIDE,
+    "gateway": _GATEWAY_GUIDE,
 }
 
 
 def guide_text(brand: str) -> str:
     """Return the plain-language key-fetching guide for one brand.
 
-    ``brand`` is one of ``"miio"`` (alias ``"xiaomi"``), ``"tuya"`` or
-    ``"ha"`` (alias ``"homeassistant"``), case-insensitive. The text
-    explains every step the user performs on their own accounts and
-    devices; it contains no real keys and no placeholders for any.
+    ``brand`` is one of ``"miio"`` (alias ``"xiaomi"``), ``"tuya"``,
+    ``"tuya_cloud"`` (alias ``"tuya-cloud"``), ``"ha"`` (aliases
+    ``"homeassistant"`` / ``"home-assistant"``), ``"matter"``,
+    ``"zigbee2mqtt"`` (aliases ``"zigbee"`` / ``"z2m"``) or
+    ``"gateway"``, case-insensitive. The text explains every step the
+    user performs on their own accounts and devices; it contains no
+    real keys, only placeholders the user replaces with their own.
     """
     try:
         return _GUIDES[brand.strip().lower()]
     except (KeyError, AttributeError):
         raise ValueError(
-            f"no setup guide for {brand!r}; available: miio, tuya, ha"
+            f"no setup guide for {brand!r}; available: miio, tuya, "
+            f"tuya_cloud, ha, matter, zigbee2mqtt, gateway"
         ) from None
 
 

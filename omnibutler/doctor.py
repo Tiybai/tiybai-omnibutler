@@ -25,10 +25,13 @@ The source of settings can be:
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlparse
 
 from omnibutler import config as config_module
 from omnibutler.core.audit import default_audit_path
@@ -320,6 +323,194 @@ def _check_tuya(
     )
 
 
+def _check_config_version(
+    config: Mapping[str, Any],
+    config_file: Path | None,
+    environ: Mapping[str, str],
+    *,
+    config_is_authoritative: bool = False,
+) -> CheckResult:
+    name = "config-version"
+    current = config_module.CURRENT_CONFIG_VERSION
+    if "version" in config:
+        raw: Any = config["version"]
+    elif config_is_authoritative:
+        # The config was handed to us (or loaded from its file): an
+        # absent version field is a version-1 config, full stop.
+        return CheckResult(
+            name, OK,
+            "no \"version\" field - treated as version 1, which is "
+            "the current format; it gets stamped in the next time "
+            "a command writes the config",
+        )
+    else:
+        path = config_file or config_module.default_config_path(environ)
+        if not path.exists():
+            if config:
+                return CheckResult(
+                    name, OK,
+                    "no \"version\" field - treated as version 1, which "
+                    "is the current format; it gets stamped in the next "
+                    "time a command writes the config",
+                )
+            return CheckResult(
+                name, WARN,
+                f"no config file at {path} yet - nothing to version; "
+                f"the first config write stamps version {current}",
+            )
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return CheckResult(
+                name, WARN,
+                f"could not read a version from {path} - see the "
+                "config result above for the actual problem",
+            )
+        if not isinstance(parsed, dict) or "version" not in parsed:
+            return CheckResult(
+                name, OK,
+                "no \"version\" field - treated as version 1, which is "
+                "the current format; it gets stamped in the next time "
+                "a command writes the config",
+            )
+        raw = parsed["version"]
+    try:
+        version = config_module.config_version({"version": raw})
+    except config_module.ConfigError as exc:
+        # Same explanation the loader gives when it refuses the file.
+        return CheckResult(name, FAIL, str(exc))
+    migrated = "a migration path to the current format exists" \
+        if version < current else "this is the current format"
+    return CheckResult(
+        name, OK, f"config version {version} - {migrated}")
+
+
+def _probe_tcp(host: str, port: int, timeout: float) -> str | None:
+    """Open one TCP connection: None when it connects, else the error.
+
+    Reachability only - no protocol bytes are sent, so this is safe to
+    point at any service (Matter controller, MQTT broker).
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return None
+    except OSError as exc:
+        return exc.strerror or str(exc)
+
+
+def _check_tcp_endpoint(
+    name: str,
+    url: str,
+    *,
+    timeout: float,
+    default_scheme: str,
+    default_ports: Mapping[str, int],
+    ok_detail: str,
+    fail_hint: str,
+) -> CheckResult:
+    parsed = urlparse(url if "://" in url else f"{default_scheme}://{url}")
+    host = parsed.hostname
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port is None:
+        port = default_ports.get(parsed.scheme, next(iter(default_ports.values())))
+    if not host:
+        return CheckResult(
+            name, FAIL,
+            f"could not read a host out of the configured address "
+            f"{url!r} - write it like {default_scheme}://192.168.1.10:{port}",
+        )
+    error = _probe_tcp(host, port, timeout)
+    if error is not None:
+        return CheckResult(
+            name, FAIL,
+            f"configured at {url} but nothing answers at {host}:{port} "
+            f"({error}) - {fail_hint}",
+        )
+    return CheckResult(name, OK, ok_detail.format(host=host, port=port))
+
+
+def _check_matter(
+    config: Mapping[str, Any], environ: Mapping[str, str], timeout: float
+) -> CheckResult:
+    name = "matter"
+    section = config_module.get_section(config, "matter")
+    url = str(section.get("server_url") or section.get("url") or "").strip()
+    if not url:
+        url = environ.get("MATTER_SERVER_URL", "").strip()
+    if not url:
+        return CheckResult(
+            name, WARN,
+            "not configured - no Matter controller address. If you run "
+            "a Matter controller service (matterjs-server or "
+            "python-matter-server), set matter.server_url in the "
+            "config file (or MATTER_SERVER_URL) and the Matter driver "
+            "will talk to it",
+        )
+    return _check_tcp_endpoint(
+        name, url, timeout=timeout,
+        default_scheme="ws",
+        default_ports={"ws": 80, "wss": 443},
+        ok_detail="the Matter controller answers TCP at {host}:{port} "
+                  "(reachability only - the doctor opens a plain TCP "
+                  "connection; the real WebSocket handshake happens "
+                  "when the driver connects)",
+        fail_hint="is the Matter controller service running, and is "
+                  "this machine on the same network?",
+    )
+
+
+def _check_zigbee2mqtt(
+    config: Mapping[str, Any], environ: Mapping[str, str], timeout: float
+) -> CheckResult:
+    name = "zigbee2mqtt"
+    section = config_module.get_section(config, "zigbee2mqtt")
+    url = str(
+        section.get("mqtt_url") or section.get("broker_url")
+        or section.get("url") or ""
+    ).strip()
+    if not url:
+        url = environ.get("Z2M_MQTT_URL", "").strip()
+    if not url:
+        return CheckResult(
+            name, WARN,
+            "not configured - no MQTT broker address for Zigbee2MQTT. "
+            "If you run Zigbee2MQTT, set zigbee2mqtt.mqtt_url in the "
+            "config file (or Z2M_MQTT_URL) so the bridge can reach "
+            "its broker",
+        )
+    return _check_tcp_endpoint(
+        name, url, timeout=timeout,
+        default_scheme="mqtt",
+        default_ports={"mqtt": 1883, "mqtts": 8883},
+        ok_detail="an MQTT broker answers TCP at {host}:{port} "
+                  "(reachability only - this does not check the MQTT "
+                  "username/password, and a broker answering does not "
+                  "by itself prove Zigbee2MQTT is running)",
+        fail_hint="is the MQTT broker running, and is this machine "
+                  "on the same network?",
+    )
+
+
+def _check_gateway_token(environ: Mapping[str, str]) -> CheckResult:
+    name = "gateway-token"
+    if environ.get("OMNIBUTLER_GATEWAY_TOKEN", "").strip():
+        return CheckResult(
+            name, OK,
+            "the phone-gateway token is set (its value is never "
+            "shown) - `tob gateway` will accept uploads that carry it",
+        )
+    return CheckResult(
+        name, WARN,
+        "the phone-gateway token is not set - only needed if you use "
+        "the phone gateway (`tob gateway`), which refuses to start "
+        "without one. Set OMNIBUTLER_GATEWAY_TOKEN to a long random "
+        "string first",
+    )
+
+
 def _check_state_dir(runtime: Any | None) -> CheckResult:
     name = "state-dir"
     audit_path: Path | None = None
@@ -403,21 +594,29 @@ def check_all(
     results: list[CheckResult] = []
 
     config: dict[str, Any] = {}
+    config_file: Path | None = None
+    config_is_authoritative = False
     if isinstance(source, Mapping):
         config = dict(source)
+        config_is_authoritative = True
     elif source is None:
         path = (
             Path(config_path)
             if config_path is not None
             else config_module.default_config_path(environ)
         )
+        config_file = path
         try:
             config = config_module.load_config(path, environ=environ)
+            config_is_authoritative = path.exists()
             if path.exists():
                 results.append(CheckResult("config", OK, f"loaded from {path}"))
         except config_module.ConfigError as exc:
             results.append(CheckResult("config", FAIL, str(exc)))
             config = {}
+    results.append(_check_config_version(
+        config, config_file, environ,
+        config_is_authoritative=config_is_authoritative))
 
     # Runtime mode: prefer the live HA driver's own settings.
     ha = config_module.ha_settings(config, environ=environ)
@@ -433,6 +632,9 @@ def check_all(
     results.extend(_check_miio(_miio_entries(config, environ), timeout))
     tuya_entries, tuya_error = _tuya_entries(config, environ)
     results.append(_check_tuya(tuya_entries, tuya_error))
+    results.append(_check_matter(config, environ, timeout))
+    results.append(_check_zigbee2mqtt(config, environ, timeout))
+    results.append(_check_gateway_token(environ))
     results.append(_check_state_dir(runtime))
     results.append(_check_scenes(scenes_dir))
     return results

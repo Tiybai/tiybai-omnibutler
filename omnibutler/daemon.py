@@ -15,6 +15,12 @@ Safety is unchanged: the daemon only ever *feeds events* to the engine, so
 high-risk actions still land in the confirmation queue (never executed
 directly), and every trigger plus its outcome is written to the audit log.
 
+Optional extras run in the same process: the human approvals web page,
+macOS confirmation dialogs, and the phone gateway (``gateway_port``) -
+the latter on the runtime's own event bus and stream store, so phone
+geofence events fire scenes here, not in a second process that would
+double-execute them.
+
 ``run_daemon`` takes injectable ``sleep_fn`` / ``now_fn`` and a
 ``max_ticks`` bound so tests can drive it deterministically with a fake
 clock and no real sleeping.
@@ -47,6 +53,8 @@ class Daemon:
         approvals_port: int = 0,
         approvals_host: str = "127.0.0.1",
         notify: bool = False,
+        gateway_port: int = 0,
+        gateway_host: str = "127.0.0.1",
     ) -> None:
         self.runtime = runtime
         self.engine = runtime.engine
@@ -66,6 +74,16 @@ class Daemon:
         self._approvals_httpd = None
         self._approvals_thread: threading.Thread | None = None
         self._watcher_thread: threading.Thread | None = None
+        # Optional phone-gateway extra (started/stopped with the loop):
+        # the tokened HTTP ingest/event endpoint from gateway.py, served
+        # in this same process on the runtime's own bus and stream store,
+        # so a geofence event and the scenes it fires never cross a
+        # process boundary (two processes would double-fire scenes).
+        self.gateway_port = gateway_port
+        self.gateway_host = gateway_host
+        self._gateway_httpd = None
+        self._gateway_thread: threading.Thread | None = None
+        self._gateway_counter = None
 
         self._stop = threading.Event()
         self._last_minute_key: str | None = None
@@ -80,6 +98,8 @@ class Daemon:
             "polls": 0,
             "state_changes": 0,
             "errors": 0,
+            "gateway_events": 0,
+            "gateway_errors": 0,
         }
 
     # -- control ---------------------------------------------------------
@@ -124,6 +144,7 @@ class Daemon:
 
     # -- human-approval extras (approvals web page / macOS dialogs) ----------
     def _start_extras(self) -> None:
+        self._start_gateway_extra()
         confirmations = self.runtime.confirmations
         if self.approvals_port > 0:
             from omnibutler.approvals_web import create_http_server
@@ -170,7 +191,69 @@ class Daemon:
                     AGENT, "daemon", "daemon:notify_started", {}, ok=True,
                 )
 
+    # -- phone gateway extra ---------------------------------------------------
+    def _start_gateway_extra(self) -> None:
+        if self.gateway_port <= 0:
+            return
+        from omnibutler.gateway import GatewayError, create_http_server
+
+        streams = getattr(self.runtime, "streams", None)
+        bus = getattr(self.runtime, "bus", None)
+        if streams is None or bus is None:
+            self._gateway_refused("runtime has no stream store / event bus")
+            return
+        try:
+            httpd = create_http_server(
+                bus, streams, host=self.gateway_host, port=self.gateway_port,
+            )
+        except (GatewayError, OSError) as exc:
+            # No token configured (or the port is taken): refuse just
+            # this extra, say why in the audit log and stats, and keep
+            # the daemon itself running - scenes and polling still work.
+            self._gateway_refused(str(exc))
+            return
+        self._gateway_httpd = httpd
+        self._gateway_thread = threading.Thread(
+            target=httpd.serve_forever,
+            name="omnibutler-gateway", daemon=True,
+        )
+        self._gateway_thread.start()
+
+        def _count_phone_event(event) -> None:
+            if event.source == "phone":
+                self.stats["gateway_events"] += 1
+
+        self._gateway_counter = _count_phone_event
+        bus.subscribe("*", _count_phone_event)
+        self.audit.record(
+            AGENT, "daemon", "daemon:gateway_started", {},
+            result={"host": self.gateway_host,
+                    "port": httpd.server_address[1]},
+            ok=True,
+        )
+
+    def _gateway_refused(self, reason: str) -> None:
+        self.stats["gateway_errors"] += 1
+        self.audit.record(
+            AGENT, "daemon", "daemon:gateway_error",
+            {"host": self.gateway_host, "port": self.gateway_port},
+            result={"reason": reason},
+            ok=False, error=reason,
+        )
+
     def _stop_extras(self) -> None:
+        if self._gateway_httpd is not None:
+            self._gateway_httpd.shutdown()
+            self._gateway_httpd.server_close()
+            self._gateway_httpd = None
+        if self._gateway_counter is not None:
+            bus = getattr(self.runtime, "bus", None)
+            if bus is not None:
+                bus.unsubscribe("*", self._gateway_counter)
+            self._gateway_counter = None
+        if self._gateway_thread is not None:
+            self._gateway_thread.join(timeout=5)
+            self._gateway_thread = None
         if self._approvals_httpd is not None:
             self._approvals_httpd.shutdown()
             self._approvals_httpd.server_close()
@@ -306,6 +389,8 @@ def run_daemon(
     approvals_port: int = 0,
     approvals_host: str = "127.0.0.1",
     notify: bool = False,
+    gateway_port: int = 0,
+    gateway_host: str = "127.0.0.1",
 ) -> dict[str, int]:
     """Run the bridge daemon until SIGINT/SIGTERM (or ``max_ticks`` ticks).
 
@@ -316,6 +401,10 @@ def run_daemon(
     page (see approvals_web; needs $OMNIBUTLER_APPROVALS_TOKEN) in the
     same process. ``notify`` enables macOS dialog popups for newly queued
     confirmations; on other platforms it is reported and skipped.
+    ``gateway_port`` > 0 additionally serves the phone gateway (see
+    gateway; needs $OMNIBUTLER_GATEWAY_TOKEN) in the same process, on
+    the runtime's own bus and stream store; a missing token refuses
+    only the gateway, never the daemon.
     """
     daemon = Daemon(
         runtime,
@@ -326,5 +415,7 @@ def run_daemon(
         approvals_port=approvals_port,
         approvals_host=approvals_host,
         notify=notify,
+        gateway_port=gateway_port,
+        gateway_host=gateway_host,
     )
     return daemon.run(max_ticks=max_ticks)

@@ -9,6 +9,7 @@ once more than a device or two is involved:
 Shape (all sections optional)::
 
     {
+      "version": 1,
       "ha":   {"url": "http://192.168.1.10:8123",
                "token": "env:HA_TOKEN"},
       "miio": {"devices": [{"id": "living_ac", "host": "192.168.1.31",
@@ -32,8 +33,9 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from omnibutler.core.errors import OmniButlerError
 
@@ -93,7 +95,153 @@ def load_config(
             f"config file {config_path} must contain a JSON object at the "
             f"top level, not {type(parsed).__name__}"
         )
-    return parsed
+    return migrate_config(parsed)
+
+
+# ---------------------------------------------------------------------------
+# Format versioning (design: docs/config-versioning.md)
+# ---------------------------------------------------------------------------
+
+#: The config format version this build writes and understands.
+CURRENT_CONFIG_VERSION = 1
+
+#: Migration registry: ``MIGRATIONS[n]`` turns a version-n config dict
+#: into a version-(n+1) one. Migrations are pure dict -> dict functions
+#: with no I/O; they run on the raw parsed JSON *before* any ``env:``
+#: secret resolution, so they never see a real secret value. Empty
+#: while the format is at version 1 - the first format change registers
+#: its step here, e.g. ``MIGRATIONS[1] = _migrate_1_to_2`` alongside a
+#: ``CURRENT_CONFIG_VERSION`` bump to 2.
+MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+
+
+def config_version(data: Mapping[str, Any]) -> int:
+    """The format version of a parsed config dict.
+
+    A missing ``version`` field means version 1 (every config file
+    written before versioning existed is a version-1 file). A version
+    that is not an integer, is below 1, or is newer than
+    :data:`CURRENT_CONFIG_VERSION` raises :class:`ConfigError` - a
+    config written by a newer OmniButler is refused with an explanation,
+    never silently misread.
+    """
+    if "version" not in data:
+        return 1
+    value = data["version"]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(
+            f"config version must be an integer, got {value!r} - fix the "
+            "\"version\" field in the config file or remove it (a missing "
+            "version is treated as 1)"
+        )
+    if value < 1:
+        raise ConfigError(
+            f"config version {value} is not a real version - fix the "
+            "\"version\" field in the config file or remove it (a missing "
+            "version is treated as 1)"
+        )
+    if value > CURRENT_CONFIG_VERSION:
+        raise ConfigError(
+            f"this config was written by a newer OmniButler (config "
+            f"version {value}); this build only understands up to "
+            f"version {CURRENT_CONFIG_VERSION}. Please upgrade "
+            "OmniButler instead of editing the version number down - "
+            "the newer format may store settings this build would "
+            "misread or drop."
+        )
+    return value
+
+
+def migrate_config(data: dict[str, Any]) -> dict[str, Any]:
+    """Validate a parsed config and walk it up to the current version.
+
+    Applies the :data:`MIGRATIONS` chain in memory only - loading never
+    rewrites the user's file (see :func:`save_config` for the write-back
+    rules). Raises :class:`ConfigError` for an unusable version field
+    or a missing migration step.
+    """
+    version = config_version(data)
+    migrated = data
+    while version < CURRENT_CONFIG_VERSION:
+        step = MIGRATIONS.get(version)
+        if step is None:
+            raise ConfigError(
+                f"no migration is registered from config version "
+                f"{version} to {version + 1}; this build cannot load "
+                "the config safely - please upgrade OmniButler"
+            )
+        migrated = step(migrated)
+        version += 1
+    return migrated
+
+
+def save_config(path: str | Path, data: Mapping[str, Any]) -> Path:
+    """Write a config dict to ``path`` under the versioning rules.
+
+    The file is written atomically with mode 0600 (same discipline as
+    the setup helpers) and stamped with
+    ``"version": CURRENT_CONFIG_VERSION`` - the caller's dict is copied,
+    never mutated. Loading never rewrites the file, so this write-back
+    is the one moment an older file is upgraded on disk: before the
+    first write-back of a file that predates the current format (no
+    ``version`` field, or a lower one), a one-time backup is kept next
+    to it as ``<name>.v<old>.bak`` (e.g. ``config.json.v1.bak``); an
+    existing backup is never overwritten, so the first backup stays the
+    pristine pre-versioning copy. A file that exists but is not valid
+    JSON, or not a JSON object, raises :class:`ConfigError` instead of
+    being clobbered.
+    """
+    config_path = Path(path)
+    payload = dict(data)
+    payload["version"] = CURRENT_CONFIG_VERSION
+    if config_path.exists():
+        try:
+            existing = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ConfigError(
+                f"config file {config_path} exists but cannot be parsed "
+                f"({exc}); refusing to overwrite it - fix it by hand first"
+            ) from exc
+        if not isinstance(existing, dict):
+            raise ConfigError(
+                f"config file {config_path} must contain a JSON object "
+                "at the top level; refusing to overwrite it"
+            )
+        raw_version = existing.get("version")
+        predates = "version" not in existing or (
+            isinstance(raw_version, int)
+            and not isinstance(raw_version, bool)
+            and raw_version < CURRENT_CONFIG_VERSION
+        )
+        if predates:
+            old = (
+                raw_version
+                if isinstance(raw_version, int)
+                and not isinstance(raw_version, bool)
+                and raw_version >= 1
+                else 1
+            )
+            backup = config_path.with_name(f"{config_path.name}.v{old}.bak")
+            if not backup.exists():
+                backup.write_bytes(config_path.read_bytes())
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(config_path.parent), prefix=".config-", suffix=".tmp"
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        os.replace(tmp_name, config_path)
+        os.chmod(config_path, 0o600)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return config_path
 
 
 def get_section(config: Mapping[str, Any], name: str) -> dict[str, Any]:
