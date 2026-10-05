@@ -9,11 +9,10 @@ assert both the wire addresses (siid/piid) and the value translations.
 """
 
 import pytest
+from test_miio_driver import TOKEN, FakeMiioDevice, _driver_for
 
 from omnibutler.core.errors import PropertyValidationError
 from omnibutler.drivers.miio import _kind_from_model
-from test_miio_driver import TOKEN, FakeMiioDevice, _driver_for
-
 
 # -- family selection ---------------------------------------------------------
 

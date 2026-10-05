@@ -31,7 +31,7 @@ def test_profiles_exist_and_are_unique():
 @pytest.mark.parametrize("path", FILES, ids=[p.name for p in FILES])
 def test_profile_is_valid(path: Path):
     data = _load(path)
-    assert REQUIRED_FIELDS <= set(data), (
+    assert set(data) >= REQUIRED_FIELDS, (
         f"{path.name}: missing fields {REQUIRED_FIELDS - set(data)}"
     )
     assert data["risk"] in {"low", "medium", "high"}

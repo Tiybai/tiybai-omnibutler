@@ -247,8 +247,8 @@ def test_open_session_is_audited_once_by_the_session_manager(
 
 
 def test_open_session_never_enters_the_confirmation_queue(server, engine):
-    payload, is_error = _call(server, "open_terminal_session",
-                              {"device_id": "glasses", "kind": "glasses"})
+    _payload, is_error = _call(server, "open_terminal_session",
+                               {"device_id": "glasses", "kind": "glasses"})
     assert not is_error
     assert engine.confirmations.pending() == []
 

@@ -14,7 +14,7 @@ operator's own configuration, never hard-coded and never logged:
   ``id`` (canonical OmniButler device id), ``host`` (device IP), ``token``
   (32 hex characters), and optionally ``model``, ``name``, ``room``,
   ``kind`` (``"air_conditioner"`` / ``"air_purifier"`` / ``"light"`` /
-  ``"fan"`` / ``"humidifier"``) and ``mapping``
+  ``"fan"`` / ``"humidifier"`` / ``"vacuum"``) and ``mapping``
   (per-property MIoT address overrides).
 * Environment: ``MIIO_DEVICES`` holds the same list as a JSON array; or a
   single device via ``MIIO_HOST`` / ``MIIO_TOKEN`` / ``MIIO_MODEL``.
@@ -37,6 +37,18 @@ model that deviates is handled by the same per-device ``mapping``
 overrides. The humidifier's ``humidity_reading`` is a raw reading in
 the filter-life mould, from the Environment service many humidifiers
 expose right after the main service.
+
+The vacuum table pairs the specification's standard Vacuum service
+with the standard Battery service that in practice sits right after
+it. Two vacuum facts shape the table and are worth knowing before
+trusting it: the status property's code meanings are defined per
+model in that model's own instance value-list (Roborock's codes are
+not Dreame's), so the status code is reported raw rather than
+labelled; and a vacuum has no writable power property at all - start,
+stop and charge are MIoT actions, carried in the table as
+``kind="action"`` entries whose piid slot holds the aiid and which
+run through the protocol's ``action`` method instead of
+``set_properties``.
 """
 
 from __future__ import annotations
@@ -186,7 +198,7 @@ def discover_hosts(
         while time.monotonic() < deadline:
             try:
                 data, addr = sock.recvfrom(1024)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -224,7 +236,7 @@ class _Session:
             sock.connect((self.host, self.port))
             sock.send(packet)
             return sock.recv(4096)
-        except socket.timeout as exc:
+        except TimeoutError as exc:
             raise OmniButlerError(
                 f"miIO device at {self.host} did not answer within "
                 f"{self.timeout:.0f}s - check it is powered and on this network"
@@ -313,7 +325,7 @@ class _MiotRef:
     values: tuple[str, ...] = ()  # labels indexed by wire code (enum/fan_level)
     writable: bool = True
 
-    def with_overrides(self, override: dict[str, Any]) -> "_MiotRef":
+    def with_overrides(self, override: dict[str, Any]) -> _MiotRef:
         return _MiotRef(
             siid=int(override.get("siid", self.siid)),
             piid=int(override.get("piid", self.piid)),
@@ -374,6 +386,30 @@ _FAMILY_MAPS: dict[str, dict[str, _MiotRef]] = {
         # surfaces as a raw state reading only.
         "humidity_reading": _MiotRef(3, 1, "number", writable=False),
     },
+    # Vacuum: the MIoT specification's standard Vacuum service plus
+    # the standard Battery service - published protocol facts, same
+    # standing as the families above. Start / stop / charge exist
+    # only as MIoT actions, so they are carried as kind="action"
+    # entries whose piid slot holds the aiid (the convention the
+    # xiaomi_cloud driver already routes on): get_state skips them,
+    # set_property refuses them, and call_action runs them through
+    # the protocol's "action" method. There is no pause action in
+    # the standard service - some models add one of their own, which
+    # is what the per-device ``mapping`` overrides are for.
+    "vacuum": {
+        # Status codes are defined per model in that model's own
+        # instance value-list, so no label table is honest here:
+        # the raw code is reported as-is, in the filter_life mould.
+        "status": _MiotRef(2, 1, "number", writable=False),
+        # Battery service (in practice siid 3, right after the
+        # Vacuum service): battery level in percent at piid 1.
+        "battery": _MiotRef(3, 1, "number", writable=False),
+        "start_sweep": _MiotRef(2, 1, "action"),
+        "stop_sweeping": _MiotRef(2, 2, "action"),
+        # Start-charge belongs to the Battery service, not the
+        # Vacuum service: siid 3, aiid 1.
+        "start_charge": _MiotRef(3, 1, "action"),
+    },
 }
 
 # Canonical Property objects surfaced for each mapped family member.
@@ -402,6 +438,13 @@ _FAMILY_PROPERTIES: dict[str, dict[str, Property]] = {
         "onoff": Property(Cap.ONOFF),
         "fan_speed": Property(Cap.FAN_SPEED),
     },
+    "vacuum": {
+        # Power is action-backed (turn_on runs start_sweep, turn_off
+        # runs stop_sweeping + start_charge); the device itself has
+        # no writable on/off property - see the family map.
+        "onoff": Property(Cap.ONOFF),
+        "battery": Property(Cap.BATTERY),
+    },
 }
 
 
@@ -421,6 +464,11 @@ def _kind_from_model(model: str) -> str:
         return "fan"
     if any(word in text for word in ("light", "yeelight", "bulb", "lamp", "strip")):
         return "light"
+    # Checked last, after every family above, so no model that
+    # already classified changes family: robot vacuums
+    # (roborock.vacuum.*, dreame.vacuum.*, viomi.vacuum.*, ...).
+    if "vacuum" in text:
+        return "vacuum"
     return ""
 
 
@@ -442,7 +490,7 @@ class MiioDeviceConfig:
     mapping: dict[str, Any] | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "MiioDeviceConfig":
+    def from_dict(cls, data: dict[str, Any]) -> MiioDeviceConfig:
         return cls(
             id=str(data["id"]),
             host=str(data["host"]),
@@ -580,6 +628,13 @@ class MiioDriver(Driver):
     def _device_object(self, config: MiioDeviceConfig) -> Device:
         family = config.family
         properties = dict(_FAMILY_PROPERTIES.get(family, {}))
+        # Families whose table carries MIoT actions (vacuum) expose
+        # them alongside the generic power actions.
+        actions = ["turn_on", "turn_off"] + [
+            name
+            for name, ref in _FAMILY_MAPS.get(family, {}).items()
+            if ref.kind == "action"
+        ]
         return Device(
             id=config.id,
             name=config.name or config.id,
@@ -588,7 +643,7 @@ class MiioDriver(Driver):
             brand="Xiaomi",
             model=config.model,
             properties=properties,
-            actions=["turn_on", "turn_off"],
+            actions=actions,
         )
 
     # -- value translation ---------------------------------------------------
@@ -682,13 +737,19 @@ class MiioDriver(Driver):
     def get_state(self, device_id: str) -> dict[str, Any]:
         config = self._config(device_id)
         mapping = self._mapping(config)
+        # Action entries are not readable properties (their piid
+        # slot holds an aiid, which can share an address with a real
+        # property); they are excluded from the read.
+        readable = [
+            (name, ref) for name, ref in mapping.items() if ref.kind != "action"
+        ]
         addresses = [
-            {"siid": ref.siid, "piid": ref.piid} for ref in mapping.values()
+            {"siid": ref.siid, "piid": ref.piid} for _name, ref in readable
         ]
         results = self._miot_call(config, "get_properties", addresses)
         state: dict[str, Any] = {}
         failures = 0
-        for (name, ref), item in zip(mapping.items(), results):
+        for (name, ref), item in zip(readable, results, strict=False):
             if not isinstance(item, dict) or item.get("code") != 0:
                 failures += 1
                 continue
@@ -700,11 +761,60 @@ class MiioDriver(Driver):
             )
         return state
 
+    # -- MIoT actions ------------------------------------------------------
+    def _run_miot_action(
+        self, config: MiioDeviceConfig, ref: _MiotRef, inputs: list
+    ) -> dict[str, Any]:
+        """Run the MIoT action addressed by *ref* (siid + aiid, the
+        aiid carried in the ref's piid slot) and return its result
+        item. The protocol's ``action`` method takes
+        ``{did, siid, aiid, in: [...]}`` per call (facts:
+        docs/specs/miio-protocol.md)."""
+        session = self._session(config)
+        if session.device_id is None:
+            session.handshake()
+        did = str(session.device_id)
+        result = session.request(
+            "action",
+            [{"did": did, "siid": ref.siid, "aiid": ref.piid,
+              "in": list(inputs)}],
+        )
+        item = result[0] if isinstance(result, list) and result else result
+        if isinstance(item, dict) and item.get("code") not in (0, None):
+            raise OmniButlerError(
+                f"miIO device {config.id!r} refused the action at "
+                f"siid {ref.siid} aiid {ref.piid} (result code "
+                f"{item.get('code')})"
+            )
+        return item if isinstance(item, dict) else {}
+
+    def _power_via_actions(
+        self, config: MiioDeviceConfig, mapping: dict[str, _MiotRef], on: bool
+    ) -> dict[str, Any]:
+        """Power for action-backed families (vacuum): on starts a
+        sweep; off stops sweeping and sends the vacuum back to its
+        dock to charge - there is no power property to write."""
+        if on:
+            self._run_miot_action(config, mapping["start_sweep"], [])
+        else:
+            self._run_miot_action(config, mapping["stop_sweeping"], [])
+            self._run_miot_action(config, mapping["start_charge"], [])
+        return {"onoff": on}
+
     def set_property(self, device_id: str, property_name: str, value: Any) -> dict[str, Any]:
         config = self._config(device_id)
         mapping = self._mapping(config)
         ref = mapping.get(property_name)
+        if ref is not None and ref.kind == "action":
+            raise PropertyValidationError(
+                f"{property_name!r} of device {device_id!r} is a MIoT "
+                "action, not a settable property; run it with call_action"
+            )
         if ref is None:
+            if property_name == "onoff" and "start_sweep" in mapping:
+                # Action-backed power (vacuum): expressed as the
+                # family's start / stop+charge actions instead.
+                return self._power_via_actions(config, mapping, bool(value))
             raise PropertyValidationError(
                 f"device {device_id!r} has no miIO-mapped property "
                 f"{property_name!r}; available: {sorted(mapping)}"
@@ -721,19 +831,35 @@ class MiioDriver(Driver):
         )
         item = results[0] if results else {}
         if not isinstance(item, dict) or item.get("code") != 0:
+            code = item.get("code") if isinstance(item, dict) else "missing"
             raise OmniButlerError(
                 f"miIO device {device_id!r} refused to set "
-                f"{property_name!r} (result code {item.get('code') if isinstance(item, dict) else 'missing'})"
+                f"{property_name!r} (result code {code})"
             )
         return {property_name: value}
 
     def call_action(
         self, device_id: str, action: str, params: dict[str, Any]
     ) -> dict[str, Any]:
-        if action in {"turn_on", "turn_off"}:
-            return self.set_property(device_id, "onoff", action == "turn_on")
         config = self._config(device_id)
+        mapping = self._mapping(config)
+        ref = mapping.get(action)
+        if ref is not None and ref.kind == "action":
+            item = self._run_miot_action(
+                config, ref, list(params.get("in") or []))
+            return {"action": action, "out": item.get("out")}
+        if action in {"turn_on", "turn_off"}:
+            if "onoff" in mapping:
+                return self.set_property(device_id, "onoff", action == "turn_on")
+            if "start_sweep" in mapping:
+                # Action-backed power (vacuum): see _power_via_actions.
+                return self._power_via_actions(
+                    config, mapping, action == "turn_on")
+        supported = ["turn_on", "turn_off"] + [
+            name for name, r in mapping.items() if r.kind == "action"
+        ]
         raise PropertyValidationError(
             f"device {device_id!r} (model {config.model!r}) does not support "
-            f"action {action!r} through this driver; supported: turn_on, turn_off"
+            f"action {action!r} through this driver; supported: "
+            f"{', '.join(supported)}"
         )

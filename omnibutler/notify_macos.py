@@ -28,8 +28,7 @@ import logging
 import subprocess
 import sys
 import threading
-import time
-from typing import Callable
+from collections.abc import Callable
 
 from omnibutler.approvals_web import apply_human_decision, describe_item
 

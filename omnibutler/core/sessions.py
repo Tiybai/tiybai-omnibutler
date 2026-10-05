@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import enum
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from omnibutler.core.audit import AuditLog
 from omnibutler.core.errors import OmniButlerError
@@ -41,7 +42,7 @@ class SessionError(OmniButlerError):
     """Raised for unknown sessions and illegal lifecycle transitions."""
 
 
-class SessionState(str, enum.Enum):
+class SessionState(str, enum.Enum):  # noqa: UP042 - StrEnum changes str(member) output; mixin kept deliberately
     OPENING = "opening"
     ACTIVE = "active"
     CLOSED = "closed"

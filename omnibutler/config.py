@@ -31,11 +31,13 @@ here describe secrets only as set / not set.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from omnibutler.core.errors import OmniButlerError
 
@@ -236,10 +238,8 @@ def save_config(path: str | Path, data: Mapping[str, Any]) -> Path:
         os.replace(tmp_name, config_path)
         os.chmod(config_path, 0o600)
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_name)
-        except OSError:
-            pass
         raise
     return config_path
 

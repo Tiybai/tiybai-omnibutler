@@ -14,6 +14,14 @@ default; loosen it deliberately, per device, never globally.
 Risk is assigned per device in the registry / device-data (`risk` field),
 can be raised per scene action, and the *highest* applicable level wins.
 
+When an action is parked, the daemon can also send one webhook POST
+(JSON) to a URL you configure (`OMNIBUTLER_NOTIFY_WEBHOOK_URL` or
+`notify.webhook_url` in config) - ntfy, Bark or any similar endpoint.
+The payload names the device, the action and the risk level; the URL
+itself is never written to the audit log or to `tob doctor` output
+(doctor reports only whether one is set). Notifications are
+fire-and-forget: a failing endpoint never blocks the queue.
+
 ## Keys and secrets
 
 - Vendor tokens, device keys (e.g. per-device local keys) and HA tokens are

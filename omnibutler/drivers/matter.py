@@ -108,7 +108,8 @@ import itertools
 import json
 import os
 import threading
-from typing import Any, Iterable
+from collections.abc import Coroutine, Iterable
+from typing import Any, cast
 
 from omnibutler.core.errors import (
     DeviceNotFoundError,
@@ -166,17 +167,21 @@ def _await(result: Any) -> Any:
     """Run an awaitable to completion from synchronous driver code."""
     if not inspect.isawaitable(result):
         return result
+    # asyncio.run accepts coroutines only. The awaitables handed in here
+    # are the vendor library's coroutine objects; anything else already
+    # raises inside asyncio.run today, so this cast changes nothing.
+    coro = cast("Coroutine[Any, Any, Any]", result)
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(result)
+        return asyncio.run(coro)
     # The caller already runs an event loop in this thread; asyncio.run
     # would refuse, so drive the coroutine on a helper thread instead.
     holder: dict[str, Any] = {}
 
     def _runner() -> None:
         try:
-            holder["value"] = asyncio.run(result)
+            holder["value"] = asyncio.run(coro)
         except BaseException as exc:  # relayed to the caller thread
             holder["error"] = exc
 
@@ -200,9 +205,9 @@ def _unwrap(value: Any) -> Any:
     carries nothing but metadata keys - a genuine struct value is data
     and passes through untouched.
     """
-    if isinstance(value, dict) and "value" in value:
-        if set(value) <= {"value", "type", "_type", "subtype"}:
-            return value["value"]
+    if isinstance(value, dict) and "value" in value \
+            and set(value) <= {"value", "type", "_type", "subtype"}:
+        return value["value"]
     return value
 
 
@@ -440,9 +445,8 @@ class MatterDriver(Driver):
             red, green, blue = colorsys.hsv_to_rgb(
                 float(hue) / 254, float(saturation) / 254, value
             )
-            state["color"] = "#{:02x}{:02x}{:02x}".format(
-                round(red * 255), round(green * 255), round(blue * 255)
-            )
+            rgb = (round(red * 255), round(green * 255), round(blue * 255))
+            state["color"] = f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
         measured = take(_CLUSTER_TEMP_MEASUREMENT, 0)
         if measured is not None:
             state["current_temperature"] = float(measured) / 100
@@ -693,7 +697,7 @@ class MatterDriver(Driver):
                     "This thermostat reports neither a cooling nor a "
                     "heating setpoint; cannot set a target temperature."
                 )
-            raw_setpoint = int(round(float(canonical) * 100))
+            raw_setpoint = round(float(canonical) * 100)
             self._write_attribute(
                 node_id, endpoint, _CLUSTER_THERMOSTAT, attribute, raw_setpoint
             )

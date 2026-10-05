@@ -16,6 +16,11 @@ TRIGGER_TYPES = {"state_change", "schedule", "geofence",
                  "session_opened", "session_closed"}
 COMPARISON_OPS = {"==", "!=", ">", "<", ">=", "<=", "in", "truthy", "falsy"}
 CONDITION_TYPES = {"state", "time_window"}
+#: Weekday abbreviations accepted in a schedule trigger's ``days`` list,
+#: mapped to the integers ``datetime.date.weekday()`` returns (Mon=0).
+WEEKDAY_ABBREVIATIONS = {
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+}
 #: Friendly spellings accepted in scene files for state-condition operators.
 OP_ALIASES = {
     "equals": "==", "eq": "==", "not_equals": "!=", "ne": "!=",
@@ -27,14 +32,18 @@ OP_ALIASES = {
 @dataclass
 class SceneTrigger:
     type: str
-    # state_change: device / property; schedule: at "HH:MM" or every_minutes;
-    # geofence: zone + transition ("enter" / "exit")
+    # state_change: device / property; schedule: at "HH:MM" or every_minutes,
+    # optionally restricted by days; geofence: zone + transition
+    # ("enter" / "exit")
     device: str | None = None
     property: str | None = None
     at: str | None = None
     every_minutes: int | None = None
     zone: str | None = None
     transition: str | None = None
+    # schedule only: weekday() integers (Mon=0 .. Sun=6) the trigger is
+    # limited to; None means every day (the pre-days behaviour).
+    days: frozenset[int] | None = None
 
 
 @dataclass

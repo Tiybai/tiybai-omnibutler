@@ -1,0 +1,16 @@
+name: weekday-morning
+description: On weekday mornings at 07:30, open the bedroom curtain and start the bedroom AC - weekends are for sleeping in.
+risk: low
+enabled: true
+trigger:
+  type: schedule
+  at: "07:30"
+  days: [mon, tue, wed, thu, fri]
+conditions: []
+actions:
+  - device: bedroom_curtain
+    action: open
+  - device: bedroom_ac
+    set: {onoff: true}
+  - device: bedroom_ac
+    set: {target_temperature: 26}

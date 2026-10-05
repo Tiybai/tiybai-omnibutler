@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # avoid a circular import at runtime
 class DeviceManager:
     def __init__(
         self,
-        drivers: dict[str, "Driver"] | None = None,
+        drivers: dict[str, Driver] | None = None,
         audit: AuditLog | None = None,
         bus: EventBus | None = None,
     ) -> None:
@@ -34,7 +34,7 @@ class DeviceManager:
         for driver in self.drivers.values():
             self.registry.register_many(driver.list_devices())
 
-    def add_driver(self, driver: "Driver") -> None:
+    def add_driver(self, driver: Driver) -> None:
         self.drivers[driver.name] = driver
         self.registry.register_many(driver.list_devices())
 

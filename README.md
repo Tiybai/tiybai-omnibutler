@@ -35,7 +35,9 @@ sits in the middle:
   tunes scenes; it is never in the real-time control loop.
 - **Safety guardrails in code** - high-risk actions are parked in a
   confirmation queue for a human. Every control call lands in a local,
-  append-only audit log.
+  append-only audit log. An optional webhook
+  (`OMNIBUTLER_NOTIFY_WEBHOOK_URL`) pings your phone the moment
+  something queues up, so a headless bridge never waits in silence.
 
 ## Architecture
 
@@ -147,7 +149,19 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.7 (this release) - depth where it counts: the Xiaomi driver now
+v0.8 (this release) - robot vacuums join the Xiaomi local driver
+(start / stop / return to dock, battery level) through the standard
+MIOT vacuum service, and the Xiaomi cloud fallback inherits the new
+family automatically; a queued high-risk action can now push a
+webhook notification (`OMNIBUTLER_NOTIFY_WEBHOOK_URL` or
+`notify.webhook_url` in config - ntfy, Bark and similar services all
+take the POST), so a bridge running headless no longer queues in
+silence; scene schedules accept `days`, so rules like "weekdays at
+07:30" finally work; and CI gains lint (ruff) and type-check (mypy)
+gates, both green. Real-hardware verification moves to v0.9 - it
+still needs owners of real devices (issues #2 and #4).
+
+v0.7 - depth where it counts: the Xiaomi driver now
 covers lights, fans and humidifiers (standard MIOT services) next to
 air conditioners and purifiers - and the Xiaomi cloud fallback picks
 the new families up automatically; the Tuya driver controls curtain
@@ -200,7 +214,10 @@ biggest gap** (issues #2 and #4).
 - [x] v0.7 - retention caps for logs and streams; Xiaomi lights /
       fans / humidifiers; Tuya curtain motors; sustained scene
       conditions (`for_seconds`)
-- [ ] v0.8 - real-hardware verification round (needs owners of real
+- [x] v0.8 - Xiaomi robot vacuums; webhook notification when a
+      high-risk action queues; scene schedules accept `days`;
+      ruff + mypy gates in CI
+- [ ] v0.9 - real-hardware verification round (needs owners of real
       devices - see issues #2 and #4)
 - [ ] Later - PyPI release (needs the maintainer's PyPI account)
 

@@ -31,9 +31,9 @@ Data-point (DP) facts used below are the standard Tuya category definitions
 (vendor-published): outlets use DP 1 (switch), DP 17 (accumulated energy,
 0.01 kWh units) and DP 19 (current power, 0.1 W units); bulbs use DP 20
 (switch), DP 22 (brightness, raw 10-1000), DP 23 (colour temperature, raw
-0-1000 across the bulb's kelvin range) and DP 24 (colour, HSV hex string); curtains use DP 1 (control:
-open/close/stop), DP 2 (percent control, 0-100) and DP 3 (percent
-state, 0-100).
+0-1000 across the bulb's kelvin range) and DP 24 (colour, HSV hex string);
+curtains use DP 1 (control: open/close/stop), DP 2 (percent control,
+0-100) and DP 3 (percent state, 0-100).
 Per-model mappings for the device catalogue live in device-data/.
 """
 
@@ -42,7 +42,8 @@ from __future__ import annotations
 import colorsys
 import json
 import os
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from omnibutler.core.errors import (
     DeviceNotFoundError,
@@ -238,9 +239,7 @@ class TuyaDriver(Driver):
             except ValueError:
                 return raw
             red, green, blue = colorsys.hsv_to_rgb(hue, sat, val)
-            return "#{:02x}{:02x}{:02x}".format(
-                round(red * 255), round(green * 255), round(blue * 255)
-            )
+            return f"#{round(red * 255):02x}{round(green * 255):02x}{round(blue * 255):02x}"
         return raw if isinstance(raw, str) else str(raw)
 
     @staticmethod
@@ -248,9 +247,7 @@ class TuyaDriver(Driver):
         text = hex_color.lstrip("#")
         red, green, blue = (int(text[i : i + 2], 16) for i in (0, 2, 4))
         hue, sat, val = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)
-        raw = "{:04x}{:04x}{:04x}".format(
-            round(hue * 360), round(sat * 1000), round(val * 1000)
-        )
+        raw = f"{round(hue * 360):04x}{round(sat * 1000):04x}{round(val * 1000):04x}"
         return (red, green, blue), raw
 
     def _state_from_dps(self, device: Device, dps: dict[str, Any]) -> dict[str, Any]:
@@ -334,7 +331,7 @@ class TuyaDriver(Driver):
             else:
                 connection.turn_off()
         elif kind == "bulb" and property_name == "brightness":
-            raw = self._brightness_to_raw(float(canonical))
+            raw: int | str = self._brightness_to_raw(float(canonical))
             setter = getattr(connection, "set_brightness", None)
             if callable(setter):
                 setter(raw)
@@ -363,7 +360,7 @@ class TuyaDriver(Driver):
         elif kind == "curtain" and property_name == "position":
             # The wire value is an integer percent. Property validation
             # already enforces 0-100; round and clamp defensively anyway.
-            raw_position = max(0, min(100, int(round(float(canonical)))))
+            raw_position = max(0, min(100, round(float(canonical))))
             connection.set_value(
                 int(_CURTAIN_DP["percent_control"]), raw_position
             )

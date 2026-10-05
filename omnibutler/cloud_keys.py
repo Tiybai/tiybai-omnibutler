@@ -59,8 +59,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from omnibutler.core.errors import OmniButlerError
 
@@ -129,7 +130,7 @@ def _headers_to_dict(message: Any) -> dict[str, str]:
     out: dict[str, str] = {}
     if message is None:
         return out
-    for key in message.keys():
+    for key in message:
         values = message.get_all(key) or []
         out[key] = "\n".join(values) if len(values) > 1 else (values[0] if values else "")
     return out

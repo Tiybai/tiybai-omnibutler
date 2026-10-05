@@ -11,6 +11,7 @@ import base64
 import json
 import sys
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -28,7 +29,7 @@ PACKET = b"\x26\x00\x01\x02"
 
 
 class FakeBlaster:
-    instances: list = []
+    instances: ClassVar[list] = []
 
     def __init__(self, host=("192.168.1.60", 80), mac=b"\xaa\xbb\xcc\xdd\xee\xff",
                  devtype=0x520B):

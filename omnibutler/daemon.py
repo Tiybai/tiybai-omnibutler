@@ -16,7 +16,9 @@ high-risk actions still land in the confirmation queue (never executed
 directly), and every trigger plus its outcome is written to the audit log.
 
 Optional extras run in the same process: the human approvals web page,
-macOS confirmation dialogs, and the phone gateway (``gateway_port``) -
+macOS confirmation dialogs, a webhook announcement for newly queued
+confirmations (see notify_webhook; configured via environment/config,
+silent when unset), and the phone gateway (``gateway_port``) -
 the latter on the runtime's own event bus and stream store, so phone
 geofence events fire scenes here, not in a second process that would
 double-execute them.
@@ -28,11 +30,14 @@ clock and no real sleeping.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import signal
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from http.server import ThreadingHTTPServer
+from typing import Any
 
 from omnibutler.core.events import Event
 
@@ -55,6 +60,7 @@ class Daemon:
         notify: bool = False,
         gateway_port: int = 0,
         gateway_host: str = "127.0.0.1",
+        webhook_notifier=None,
     ) -> None:
         self.runtime = runtime
         self.engine = runtime.engine
@@ -71,7 +77,7 @@ class Daemon:
         self.approvals_port = approvals_port
         self.approvals_host = approvals_host
         self.notify = notify
-        self._approvals_httpd = None
+        self._approvals_httpd: ThreadingHTTPServer | None = None
         self._approvals_thread: threading.Thread | None = None
         self._watcher_thread: threading.Thread | None = None
         # Optional phone-gateway extra (started/stopped with the loop):
@@ -81,9 +87,20 @@ class Daemon:
         # process boundary (two processes would double-fire scenes).
         self.gateway_port = gateway_port
         self.gateway_host = gateway_host
-        self._gateway_httpd = None
+        self._gateway_httpd: ThreadingHTTPServer | None = None
         self._gateway_thread: threading.Thread | None = None
-        self._gateway_counter = None
+        self._gateway_counter: Callable[[Any], None] | None = None
+        # Optional approval-webhook announcement (see notify_webhook):
+        # when a notifier is configured, each newly queued confirmation
+        # is POSTed to it once. ``webhook_notifier`` may be injected
+        # (tests); None means "resolve from env/config at startup", and
+        # an unconfigured webhook simply stays off - silently.
+        self.webhook_notifier = webhook_notifier
+        # Ids already announced. Memory only, by design: after a daemon
+        # restart, items still pending are announced once more - a
+        # duplicate phone buzz after a restart beats a high-risk action
+        # sitting in the queue unannounced.
+        self._notified_approvals: set[str] = set()
 
         self._stop = threading.Event()
         self._last_minute_key: str | None = None
@@ -100,6 +117,7 @@ class Daemon:
             "errors": 0,
             "gateway_events": 0,
             "gateway_errors": 0,
+            "webhook_notifications": 0,
         }
 
     # -- control ---------------------------------------------------------
@@ -127,6 +145,7 @@ class Daemon:
                 now = self.now_fn()
                 self._maybe_fire_schedule(now)
                 self._maybe_poll(now)
+                self._maybe_notify_approvals()
                 self.stats["ticks"] += 1
                 if max_ticks is not None and self.stats["ticks"] >= max_ticks:
                     break
@@ -145,6 +164,7 @@ class Daemon:
     # -- human-approval extras (approvals web page / macOS dialogs) ----------
     def _start_extras(self) -> None:
         self._start_gateway_extra()
+        self._start_webhook_extra()
         confirmations = self.runtime.confirmations
         if self.approvals_port > 0:
             from omnibutler.approvals_web import create_http_server
@@ -190,6 +210,55 @@ class Daemon:
                 self.audit.record(
                     AGENT, "daemon", "daemon:notify_started", {}, ok=True,
                 )
+
+    # -- approval webhook extra ------------------------------------------------
+    def _start_webhook_extra(self) -> None:
+        if self.webhook_notifier is not None:
+            return  # injected (tests) - nothing to resolve
+        from omnibutler import notify_webhook
+
+        try:
+            notifier = notify_webhook.make_webhook_notifier()
+        except Exception as exc:  # a broken config must not stop the daemon
+            self.audit.record(
+                AGENT, "daemon", "daemon:webhook_unavailable", {},
+                result={"reason": str(exc)}, ok=False,
+            )
+            return
+        if notifier is None:
+            return  # unconfigured: the announcement channel is simply off
+        self.webhook_notifier = notifier
+        # The audit entry names the feature, never the URL: webhook URLs
+        # routinely embed a topic or key that acts as a credential.
+        self.audit.record(
+            AGENT, "daemon", "daemon:webhook_started", {}, ok=True,
+        )
+
+    def _maybe_notify_approvals(self) -> None:
+        """Announce each newly queued confirmation on the webhook, once.
+
+        Runs every tick but is a cheap no-op while no webhook is
+        configured. Items are marked announced *before* sending: a
+        failing webhook must not re-fire every tick (and the notifier
+        itself never raises - see notify_webhook).
+        """
+        notifier = self.webhook_notifier
+        if notifier is None:
+            return
+        try:
+            pending = self.runtime.confirmations.pending()
+        except Exception:
+            return  # queue re-reads its file per call; retry next tick
+        for item in pending:
+            if item.id in self._notified_approvals:
+                continue
+            self._notified_approvals.add(item.id)
+            try:
+                sent = notifier.notify(item)
+            except Exception:
+                sent = False
+            if sent:
+                self.stats["webhook_notifications"] += 1
 
     # -- phone gateway extra ---------------------------------------------------
     def _start_gateway_extra(self) -> None:
@@ -362,20 +431,16 @@ class Daemon:
             self.stop()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 previous[sig] = signal.signal(sig, _handler)
-            except (ValueError, OSError):
-                pass
         return previous
 
     def _restore_signal_handlers(self, previous: dict[int, Any]) -> None:
         if threading.current_thread() is not threading.main_thread():
             return
         for sig, handler in previous.items():
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, handler)
-            except (ValueError, OSError):
-                pass
 
 
 def run_daemon(
@@ -391,6 +456,7 @@ def run_daemon(
     notify: bool = False,
     gateway_port: int = 0,
     gateway_host: str = "127.0.0.1",
+    webhook_notifier=None,
 ) -> dict[str, int]:
     """Run the bridge daemon until SIGINT/SIGTERM (or ``max_ticks`` ticks).
 
@@ -404,7 +470,10 @@ def run_daemon(
     ``gateway_port`` > 0 additionally serves the phone gateway (see
     gateway; needs $OMNIBUTLER_GATEWAY_TOKEN) in the same process, on
     the runtime's own bus and stream store; a missing token refuses
-    only the gateway, never the daemon.
+    only the gateway, never the daemon. When an approval webhook is
+    configured ($OMNIBUTLER_NOTIFY_WEBHOOK_URL or the config file's
+    ``notify.webhook_url``), newly queued confirmations are announced
+    there once each; ``webhook_notifier`` injects one directly (tests).
     """
     daemon = Daemon(
         runtime,
@@ -417,5 +486,6 @@ def run_daemon(
         notify=notify,
         gateway_port=gateway_port,
         gateway_host=gateway_host,
+        webhook_notifier=webhook_notifier,
     )
     return daemon.run(max_ticks=max_ticks)

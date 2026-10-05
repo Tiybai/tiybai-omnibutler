@@ -295,6 +295,8 @@ def cmd_gateway(args) -> int:
     runtime = build_runtime(driver=args.driver, audit_path=args.audit)
     from omnibutler.gateway import serve
 
+    if runtime.streams is None:  # build_runtime always creates a store
+        raise OmniButlerError("runtime has no stream store")
     print(f"phone gateway on {args.host}:{args.port} "
           f"(token from $OMNIBUTLER_GATEWAY_TOKEN required)")
     serve(runtime.bus, runtime.streams, host=args.host, port=args.port)
@@ -304,6 +306,8 @@ def cmd_gateway(args) -> int:
 def cmd_streams(args) -> int:
     runtime = build_runtime(driver="mock", load_default_scenes=False)
     store = runtime.streams
+    if store is None:  # build_runtime always creates a store
+        raise OmniButlerError("runtime has no stream store")
     if args.stream_id:
         points = store.history(args.stream_id)
         if not points:
@@ -377,14 +381,14 @@ def cmd_fetch_keys(args) -> int:
     import getpass
     import os
 
-    from omnibutler.cloud_keys import CloudKeyError, fetch_tuya_local_keys, \
-        fetch_xiaomi_tokens
+    from omnibutler.cloud_keys import CloudKeyError, fetch_tuya_local_keys, fetch_xiaomi_tokens
 
     try:
         if args.brand == "xiaomi":
             username = os.environ.get("XIAOMI_USERNAME") or input(
                 "Xiaomi account (email/phone): ").strip()
-            password = os.environ.get("XIAOMI_PASSWORD") or getpass.getpass("Xiaomi password (hidden): ")
+            password = os.environ.get("XIAOMI_PASSWORD") or getpass.getpass(
+                "Xiaomi password (hidden): ")
             devices = fetch_xiaomi_tokens(username, password)
             if not devices:
                 print("no devices with a local token were returned")
@@ -404,7 +408,8 @@ def cmd_fetch_keys(args) -> int:
         # tuya
         access_id = os.environ.get("TUYA_ACCESS_ID") or \
             input("Tuya IoT access ID: ").strip()
-        access_secret = os.environ.get("TUYA_ACCESS_SECRET") or getpass.getpass("Tuya access secret (hidden): ")
+        access_secret = os.environ.get("TUYA_ACCESS_SECRET") or getpass.getpass(
+            "Tuya access secret (hidden): ")
         uid = os.environ.get("TUYA_UID") or input("Tuya user UID: ").strip()
         devices = fetch_tuya_local_keys(access_id, access_secret, uid)
         if not devices:
@@ -556,7 +561,8 @@ def build_parser() -> argparse.ArgumentParser:
                         default=None,
                         help="device driver set (default: mock, or $TOB_DRIVER)")
     parser.add_argument("--audit", default=None,
-                        help="audit log path (default: $TOB_AUDIT_PATH or ~/.omnibutler/audit.jsonl)")
+                        help="audit log path (default: $TOB_AUDIT_PATH or "
+                             "~/.omnibutler/audit.jsonl)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("devices", help="list devices")
@@ -644,12 +650,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_streams)
 
-    p = sub.add_parser("onboard", help="scan all drivers and report what each found device still needs")
+    p = sub.add_parser("onboard",
+                       help="scan all drivers and report what each found device still needs")
     p.add_argument("--write-draft", default=None, metavar="PATH",
                    help="also write a config draft JSON to PATH")
     p.set_defaults(func=cmd_onboard)
 
-    p = sub.add_parser("fetch-keys", help="fetch device keys from the vendor cloud once (Xiaomi tokens / Tuya local_keys)")
+    p = sub.add_parser("fetch-keys",
+                       help="fetch device keys from the vendor cloud once "
+                            "(Xiaomi tokens / Tuya local_keys)")
     p.add_argument("brand", choices=["xiaomi", "tuya"])
     p.add_argument("--store", action="store_true",
                    help="merge the fetched keys into the local config (0600)")

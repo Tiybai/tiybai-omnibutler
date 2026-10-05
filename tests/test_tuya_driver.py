@@ -4,6 +4,7 @@ sys.modules - no real library, no network, no hardware."""
 import json
 import sys
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -20,7 +21,7 @@ SECRET = "unit-test-local-key-000"
 
 class _FakeDevice:
     switch_dp = "1"
-    initial_dps: dict = {}
+    initial_dps: ClassVar[dict] = {}
 
     def __init__(self, dev_id, address, local_key=None, version=None):
         self.dev_id = dev_id
@@ -48,15 +49,15 @@ class _FakeDevice:
 
 
 class FakeOutletDevice(_FakeDevice):
-    instances: dict = {}
+    instances: ClassVar[dict] = {}
     switch_dp = "1"
-    initial_dps = {"1": False, "17": 1250, "19": 0}
+    initial_dps: ClassVar[dict] = {"1": False, "17": 1250, "19": 0}
 
 
 class FakeBulbDevice(_FakeDevice):
-    instances: dict = {}
+    instances: ClassVar[dict] = {}
     switch_dp = "20"
-    initial_dps = {"20": False, "21": "white", "22": 505, "23": 500}
+    initial_dps: ClassVar[dict] = {"20": False, "21": "white", "22": 505, "23": 500}
 
     def set_brightness(self, brightness):
         self.calls.append(("set_brightness", brightness))
@@ -168,7 +169,7 @@ def test_bulb_color(fake_tinytuya):
     assert driver.set_property("bulb", "color", "#ff0000") == {"color": "#ff0000"}
     fake = FakeBulbDevice.instances["bf222bulb"]
     assert ("set_colour", 255, 0, 0) in fake.calls
-    fake.dps["24"] = "0000{:04x}{:04x}".format(1000, 1000)  # red in HSV hex
+    fake.dps["24"] = f"0000{1000:04x}{1000:04x}"  # red in HSV hex
     assert driver.get_state("bulb")["color"] == "#ff0000"
 
 

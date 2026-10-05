@@ -51,8 +51,9 @@ import binascii
 import json
 import os
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from omnibutler.core.errors import (
     DeviceNotFoundError,

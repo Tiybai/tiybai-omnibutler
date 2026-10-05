@@ -54,7 +54,7 @@ def _resolve_token(token: str | None) -> str:
     return resolved
 
 
-def make_handler(server: "McpServer", token: str):
+def make_handler(server: McpServer, token: str):
     """Build a request-handler class bound to *server* and *token*.
 
     Exposed as a factory so tests (or an embedding application) can inject
@@ -150,7 +150,7 @@ def make_handler(server: "McpServer", token: str):
 
 
 def create_http_server(
-    server: "McpServer",
+    server: McpServer,
     host: str = "127.0.0.1",
     port: int = 8765,
     token: str | None = None,
@@ -170,7 +170,7 @@ def create_http_server(
 
 
 def serve(
-    server: "McpServer",
+    server: McpServer,
     host: str = "127.0.0.1",
     port: int = 8765,
     token: str | None = None,

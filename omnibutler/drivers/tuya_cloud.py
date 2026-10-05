@@ -75,7 +75,8 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from omnibutler.cloud_keys import HttpResponse
 from omnibutler.config import get_section, load_config, resolve_secret
@@ -147,7 +148,7 @@ def _headers_to_dict(message: Any) -> dict[str, str]:
     out: dict[str, str] = {}
     if message is None:
         return out
-    for key in message.keys():
+    for key in message:
         values = message.get_all(key) or []
         out[key] = "\n".join(values) if len(values) > 1 else (values[0] if values else "")
     return out
@@ -446,8 +447,7 @@ def _color_from_cloud(value: Any) -> str:
         return value if isinstance(value, str) else str(value)
     red, green, blue = colorsys.hsv_to_rgb(
         float(hue) / 360, float(sat) / 1000, float(val) / 1000)
-    return "#{:02x}{:02x}{:02x}".format(
-        round(red * 255), round(green * 255), round(blue * 255))
+    return f"#{round(red * 255):02x}{round(green * 255):02x}{round(blue * 255):02x}"
 
 
 def _color_to_cloud(hex_color: str) -> str:
@@ -617,7 +617,7 @@ class TuyaCloudDriver(Driver):
                         state["open_close"] = float(reported) > 0
             elif canonical == "position":
                 state["position"] = max(
-                    0, min(100, int(round(float(value)))))
+                    0, min(100, round(float(value))))
         return {k: v for k, v in state.items() if k in device.properties}
 
     def _build_device(self, entry: Mapping[str, Any],
@@ -717,7 +717,7 @@ class TuyaCloudDriver(Driver):
         elif property_name == "open_close":
             raw = "open" if canonical else "close"
         elif property_name == "position":
-            raw = max(0, min(100, int(round(float(canonical)))))
+            raw = max(0, min(100, round(float(canonical))))
         else:  # pragma: no cover - guarded by the code table above
             raw = canonical
         cloud_id = self._cloud_ids[device_id]

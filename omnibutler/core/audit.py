@@ -23,6 +23,7 @@ keeping one implementation guarantees both logs rotate identically.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -112,11 +113,9 @@ def rotate_if_needed(path: Path, incoming_bytes: int, max_bytes: int,
                 src.replace(path.with_name(f"{path.name}.{n + 1}"))
         path.replace(path.with_name(f"{path.name}.1"))
     except OSError as exc:
-        try:
+        with contextlib.suppress(Exception):
             print(f"omnibutler: could not rotate {path}: {exc}",
                   file=sys.stderr)
-        except Exception:
-            pass
 
 
 def default_audit_path() -> Path:

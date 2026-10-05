@@ -79,7 +79,8 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 from urllib.parse import unquote, urlparse
 
 from omnibutler.core.errors import (
@@ -89,9 +90,8 @@ from omnibutler.core.errors import (
     PlannedDriverError,
     PropertyValidationError,
 )
-from omnibutler.core.models import CAPABILITY_SPECS
+from omnibutler.core.models import CAPABILITY_SPECS, Device, Property
 from omnibutler.core.models import Capability as Cap
-from omnibutler.core.models import Device, Property
 from omnibutler.drivers.base import Driver
 
 _NOT_INSTALLED = (
@@ -474,7 +474,7 @@ class Zigbee2MqttDriver(Driver):
         if self._connected and self._client is not None:
             return self._client
         if self._client is None:
-            mqtt = _load_paho()  # transport gates every operation
+            _load_paho()  # transport gates every operation
             if not self._mqtt_url:
                 raise DriverNotConfiguredError(
                     f"No MQTT broker URL configured. Pass mqtt_url=... or "

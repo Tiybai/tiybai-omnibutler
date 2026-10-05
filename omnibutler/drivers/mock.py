@@ -19,7 +19,6 @@ P = Property
 def _catalogue() -> list[Device]:
     """Build a fresh set of virtual devices (state is per-instance)."""
     ac_modes = ["cool", "heat", "dry", "fan", "auto"]
-    fan_modes = ["auto", "low", "medium", "high", "turbo", "silent"]
     return [
         Device(
             id="living_ac", name="Living Room AC", driver="mock",
@@ -139,11 +138,11 @@ class MockDriver(Driver):
         device = self._device(device_id)
         device.state[property_name] = value
         # Keep derived virtual readings plausible when the AC runs.
-        if device_id.endswith("_ac") or device.id in {"living_ac", "bedroom_ac"}:
-            if device.state.get("onoff") and "current_temperature" in device.state:
-                target = device.state.get("target_temperature", 26)
-                current = device.state["current_temperature"]
-                device.state["current_temperature"] = current + (target - current) / 2
+        is_ac = device_id.endswith("_ac") or device.id in {"living_ac", "bedroom_ac"}
+        if is_ac and device.state.get("onoff") and "current_temperature" in device.state:
+            target = device.state.get("target_temperature", 26)
+            current = device.state["current_temperature"]
+            device.state["current_temperature"] = current + (target - current) / 2
         return {property_name: value}
 
     def call_action(

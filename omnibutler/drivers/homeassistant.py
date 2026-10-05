@@ -211,7 +211,7 @@ class HomeAssistantDriver(Driver):
                     f"Home Assistant returned HTTP {exc.code} for {method} {path}. "
                     "Check that HA is reachable and the token is valid."
                 ) from exc
-            except (TimeoutError, socket.timeout) as exc:
+            except TimeoutError as exc:
                 if not last:
                     continue
                 raise HomeAssistantTimeoutError(
@@ -299,7 +299,7 @@ class HomeAssistantDriver(Driver):
                        "ug/m3": "pm25", "\u00b5g/m\u00b3": "pm25", "ppm": "co2"}
             canonical = mapping.get(unit)
             try:
-                numeric = float(raw)
+                numeric = float(raw) if raw is not None else None
             except (TypeError, ValueError):
                 numeric = None
             if canonical and numeric is not None:

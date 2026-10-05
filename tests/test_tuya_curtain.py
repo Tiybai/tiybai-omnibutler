@@ -9,6 +9,7 @@ test_tuya_cloud_driver.py). No real library, network or hardware.
 import json
 import sys
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -25,8 +26,8 @@ SECRET = "unit-test-local-key-000"
 
 
 class FakeCoverDevice:
-    instances: dict = {}
-    initial_dps: dict = {"1": "close", "2": 0, "3": 0}
+    instances: ClassVar[dict] = {}
+    initial_dps: ClassVar[dict] = {"1": "close", "2": 0, "3": 0}
 
     def __init__(self, dev_id, address, local_key=None, version=None):
         self.dev_id = dev_id
@@ -46,7 +47,7 @@ class FakeCoverDevice:
 
 
 class FakeOutletDevice:
-    instances: dict = {}
+    instances: ClassVar[dict] = {}
 
     def __init__(self, *args, **kwargs):  # pragma: no cover - fallback guard
         raise AssertionError("curtain devices must not use OutletDevice "

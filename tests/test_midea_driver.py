@@ -10,6 +10,7 @@ import enum
 import json
 import sys
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -55,7 +56,7 @@ class FakeAC:
     FanSpeed = FanSpeed
     SwingMode = SwingMode
 
-    instances: dict = {}
+    instances: ClassVar[dict] = {}
     fail_auth = False
 
     def __init__(self, ip=None, port=None, device_id=None):
@@ -182,7 +183,6 @@ def test_state_mapping(fake_msmart):
 
 def test_set_property_mappings(fake_msmart):
     driver = _driver()
-    fake_holder = {}
 
     def fake_ac():
         driver.get_state("ac")

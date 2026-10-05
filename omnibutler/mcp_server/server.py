@@ -64,7 +64,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "set_device_property",
-        "description": "Set one writable property of a device (high-risk devices are refused and must go through human confirmation).",
+        "description": "Set one writable property of a device (high-risk devices "
+                       "are refused and must go through human confirmation).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -77,7 +78,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "call_device_action",
-        "description": "Run a named action on a device, e.g. turn_on, open, measure (high-risk devices are refused, see set_device_property).",
+        "description": "Run a named action on a device, e.g. turn_on, open, measure "
+                       "(high-risk devices are refused, see set_device_property).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -107,36 +109,44 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "get_pending_confirmations",
-        "description": "List high-risk actions waiting for human confirmation (read-only: only a human on the host can approve them, via `tob confirm <id>`).",
+        "description": "List high-risk actions waiting for human confirmation (read-only: "
+                       "only a human on the host can approve them, via `tob confirm <id>`).",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "list_data_streams",
-        "description": "List the read-only data streams the bridge has received (things a phone or watch reports over time: steps, sleep, heart rate, location), each with its latest value.",
+        "description": "List the read-only data streams the bridge has received "
+                       "(things a phone or watch reports over time: steps, sleep, heart rate, "
+                       "location), each with its latest value.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "get_stream_data",
-        "description": "Read one data stream: its latest value plus the most recent history points (oldest first). Use list_data_streams to find stream ids.",
+        "description": "Read one data stream: its latest value plus the most recent "
+                       "history points (oldest first). Use list_data_streams to find stream ids.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "stream_id": {"type": "string",
                               "description": "Stream id, e.g. 'phone-steps'."},
                 "limit": {"type": "integer",
-                          "description": "How many history points to return (default 20, max 200)."},
+                          "description": ("How many history points to return "
+                                          "(default 20, max 200).")},
             },
             "required": ["stream_id"],
         },
     },
     {
         "name": "list_terminal_sessions",
-        "description": "List terminal sessions that are currently open (a conversation with a pair of glasses, a watch or another terminal the AI talks through).",
+        "description": "List terminal sessions that are currently open (a conversation with "
+                       "a pair of glasses, a watch or another terminal the AI talks through).",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
         "name": "open_terminal_session",
-        "description": "Open a session on a terminal device (glasses, watch, earbuds, phone) and mark it active. This starts a conversation; it does not control any home device.",
+        "description": "Open a session on a terminal device (glasses, watch, earbuds, phone) "
+                       "and mark it active. This starts a conversation; it does not control "
+                       "any home device.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -150,7 +160,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "close_terminal_session",
-        "description": "Close a terminal session opened earlier (get its id from open_terminal_session or list_terminal_sessions).",
+        "description": "Close a terminal session opened earlier (get its id from "
+                       "open_terminal_session or list_terminal_sessions).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -323,13 +334,13 @@ class McpServer:
             stream_id = self._required(args, "stream_id")
             limit = self._history_limit(args.get("limit"))
             store = self._stream_store()
-            stream = store.get_stream(stream_id)
-            if stream is None:
+            found_stream = store.get_stream(stream_id)
+            if found_stream is None:
                 raise OmniButlerError(f"unknown data stream {stream_id!r}")
             points = store.history(stream_id)[-limit:]
             latest = store.latest(stream_id)
             return _tool_result({
-                "stream": stream.to_dict(),
+                "stream": found_stream.to_dict(),
                 "latest": (
                     {"ts": latest.ts, "value": latest.value}
                     if latest is not None else None

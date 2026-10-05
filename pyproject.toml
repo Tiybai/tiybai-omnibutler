@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tiybai-omnibutler"
-version = "0.7.0"
+version = "0.8.0"
 description = "Tiybai OmniButler - an open smart-device bridge that lets AI agents (Muse, OpenClaw, Hermes) control smart devices via MCP."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -47,3 +47,36 @@ packages = ["omnibutler"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The codebase wraps most lines well under this; 100 leaves room for the
+# long bilingual (zh/en) message strings without churn.
+line-length = 100
+
+[tool.ruff.lint]
+# A deliberately small, high-signal rule set. Families like BLE/DTZ/TRY/S
+# are NOT selected: this codebase intentionally swallows-and-logs errors
+# on robustness paths and uses local-time semantics in the scene engine,
+# so those families would flag design decisions, not defects.
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# Codes annotated in the source for conventions outside this rule set
+# (stdlib callback naming, e.g. BaseHTTPRequestHandler do_GET methods).
+# Listing them here keeps RUF100 from stripping those explanations.
+external = ["A002", "ANN001", "N802"]
+ignore = [
+    # Bilingual project: Chinese UI strings correctly use fullwidth
+    # punctuation (，。：（）), which the ambiguous-unicode rules flag.
+    # Rewriting them to ASCII would corrupt the Chinese copy.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# These session tests deliberately assert that *some* exception escapes
+# (the contract under test is "fails loudly", not a specific type).
+"tests/test_sessions.py" = ["B017"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true

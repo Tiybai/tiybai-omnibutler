@@ -50,8 +50,9 @@ How ``needs`` is decided (from the drivers' own code, not guessed):
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 from omnibutler.core.models import Device
 from omnibutler.drivers.base import Driver
@@ -389,9 +390,11 @@ def format_report(
             lines.append(f"发现了、但还差钥匙的（{len(needy)} 台）：")
             for item in needy:
                 lines.append(f"  - {_describe(item)}")
+                needs = item.needs
+                assert needs is not None  # needy is filtered on _KEY_EXPLAINED keys
                 lines.append(
-                    f"    差的是{_KEY_EXPLAINED[item.needs]}。"
-                    f"拿钥匙：{_KEY_HOW_TO[item.needs]}，存进配置就能控。"
+                    f"    差的是{_KEY_EXPLAINED[needs]}。"
+                    f"拿钥匙：{_KEY_HOW_TO[needs]}，存进配置就能控。"
                 )
             lines.append("")
         if unknown:

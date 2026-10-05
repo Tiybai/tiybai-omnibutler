@@ -77,7 +77,7 @@ class DataStream:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DataStream":
+    def from_dict(cls, data: dict[str, Any]) -> DataStream:
         if not isinstance(data, dict):
             raise ValueError(f"stream descriptor must be an object, got {data!r}")
         return cls(
@@ -106,7 +106,7 @@ class DataPoint:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DataPoint":
+    def from_dict(cls, data: dict[str, Any]) -> DataPoint:
         return cls(
             stream_id=str(data["stream_id"]),
             ts=float(data["ts"]),

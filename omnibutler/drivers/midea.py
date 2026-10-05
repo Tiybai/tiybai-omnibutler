@@ -50,7 +50,8 @@ import inspect
 import json
 import os
 import threading
-from typing import Any, Iterable
+from collections.abc import Coroutine, Iterable
+from typing import Any, cast
 
 from omnibutler.core.errors import (
     DeviceNotFoundError,
@@ -101,7 +102,6 @@ _FAN_THRESHOLDS = [(20, "SILENT"), (40, "LOW"), (60, "MEDIUM"), (80, "HIGH")]
 def _load_msmart() -> tuple[Any, Any]:
     try:
         import msmart
-
         from msmart.device import AC
     except ImportError:
         raise PlannedDriverError(_NOT_INSTALLED) from None
@@ -128,17 +128,21 @@ def _await(result: Any) -> Any:
     """Run an awaitable to completion from synchronous driver code."""
     if not inspect.isawaitable(result):
         return result
+    # asyncio.run accepts coroutines only. The awaitables handed in here
+    # are the vendor library's coroutine objects; anything else already
+    # raises inside asyncio.run today, so this cast changes nothing.
+    coro = cast("Coroutine[Any, Any, Any]", result)
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(result)
+        return asyncio.run(coro)
     # The caller already runs an event loop in this thread; asyncio.run
     # would refuse, so drive the coroutine on a helper thread instead.
     holder: dict[str, Any] = {}
 
     def _runner() -> None:
         try:
-            holder["value"] = asyncio.run(result)
+            holder["value"] = asyncio.run(coro)
         except BaseException as exc:  # relayed to the caller thread
             holder["error"] = exc
 
@@ -319,8 +323,8 @@ class MideaDriver(Driver):
                 if percent <= limit and hasattr(enum_class, name):
                     return getattr(enum_class, name)
             if hasattr(enum_class, "FULL"):
-                return getattr(enum_class, "FULL")
-        return int(round(percent))
+                return enum_class.FULL
+        return round(percent)
 
     @staticmethod
     def _swing_from(value: Any) -> bool | None:

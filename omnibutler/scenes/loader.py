@@ -8,7 +8,7 @@ by humans and by AI agents alike.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import yaml
 
@@ -18,6 +18,7 @@ from omnibutler.scenes.model import (
     CONDITION_TYPES,
     OP_ALIASES,
     TRIGGER_TYPES,
+    WEEKDAY_ABBREVIATIONS,
     Scene,
     SceneAction,
     SceneCondition,
@@ -29,7 +30,7 @@ class SceneValidationError(ValueError):
     """Raised when a scene file does not match the scene schema."""
 
 
-def _fail(scene_name: str, message: str) -> None:
+def _fail(scene_name: str, message: str) -> NoReturn:
     raise SceneValidationError(f"scene {scene_name!r}: {message}")
 
 
@@ -58,6 +59,28 @@ def _parse_hhmm(value: Any, scene_name: str, field_name: str) -> str:
                 return f"{hour:02d}:{minute:02d}"
     _fail(scene_name, f"{field_name} must be HH:MM, got {value!r}")
     raise AssertionError("unreachable")  # _fail always raises
+
+
+def _parse_days(value: Any, scene_name: str) -> frozenset[int]:
+    """Validate a schedule trigger's ``days`` list.
+
+    Accepts a non-empty list of three-letter lowercase weekday
+    abbreviations (``mon`` .. ``sun``); returns the matching set of
+    ``datetime.date.weekday()`` integers. Anything else fails the whole
+    scene - a typo'd day must not silently turn into "every day".
+    """
+    if not isinstance(value, list) or not value:
+        _fail(scene_name, "schedule trigger 'days' must be a non-empty list "
+                          "of weekday abbreviations "
+                          f"{sorted(WEEKDAY_ABBREVIATIONS)}, got {value!r}")
+    days: set[int] = set()
+    for item in value:
+        if not isinstance(item, str) or item not in WEEKDAY_ABBREVIATIONS:
+            _fail(scene_name, "schedule trigger 'days' entries must be one "
+                              f"of {sorted(WEEKDAY_ABBREVIATIONS)}, "
+                              f"got {item!r}")
+        days.add(WEEKDAY_ABBREVIATIONS[item])
+    return frozenset(days)
 
 
 def parse_scene(raw: Any, source: str | None = None) -> Scene:
@@ -94,6 +117,8 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
             parts = str(trigger.at).split(":")
             if len(parts) != 2 or not all(p.isdigit() for p in parts):
                 _fail(name, f"schedule 'at' must be HH:MM, got {trigger.at!r}")
+        if trigger_raw.get("days") is not None:
+            trigger.days = _parse_days(trigger_raw["days"], name)
     if trigger_type == "state_change" and not trigger.device:
         _fail(name, "state_change trigger requires 'device'")
 
@@ -122,15 +147,15 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
             if window_raw is not None and not isinstance(window_raw, dict):
                 _fail(name, f"conditions[{idx}].time_window must be a mapping "
                             "with 'start' and 'end'")
-            source = window_raw if isinstance(window_raw, dict) else cond_raw
-            if source.get("start") is None or source.get("end") is None:
+            window_source = window_raw if isinstance(window_raw, dict) else cond_raw
+            if window_source.get("start") is None or window_source.get("end") is None:
                 _fail(name, f"conditions[{idx}] time_window requires both "
                             "'start' and 'end' (HH:MM)")
             conditions.append(SceneCondition(
                 type="time_window",
-                start=_parse_hhmm(source["start"], name,
+                start=_parse_hhmm(window_source["start"], name,
                                   f"conditions[{idx}].time_window.start"),
-                end=_parse_hhmm(source["end"], name,
+                end=_parse_hhmm(window_source["end"], name,
                                 f"conditions[{idx}].time_window.end"),
             ))
             continue
@@ -139,7 +164,8 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
                 _fail(name, f"conditions[{idx}] is missing {field_name!r}")
         op = OP_ALIASES.get(cond_raw.get("op", "=="), cond_raw.get("op", "=="))
         if op not in COMPARISON_OPS:
-            _fail(name, f"conditions[{idx}].op must be one of {sorted(COMPARISON_OPS)}, got {cond_raw.get('op')!r}")
+            _fail(name, f"conditions[{idx}].op must be one of "
+                        f"{sorted(COMPARISON_OPS)}, got {cond_raw.get('op')!r}")
         if op not in {"truthy", "falsy"} and "value" not in cond_raw:
             _fail(name, f"conditions[{idx}] with op {op!r} requires a 'value'")
         for_seconds = cond_raw.get("for_seconds")
@@ -178,7 +204,8 @@ def parse_scene(raw: Any, source: str | None = None) -> Scene:
                 _fail(name, f"actions[{idx}].set must be a mapping of exactly one property")
             prop_name, value = next(iter(set_raw.items()))
         else:
-            _fail(name, f"actions[{idx}] needs either 'set: {{property: value}}' or 'action: <name>'")
+            _fail(name, f"actions[{idx}] needs either 'set: {{property: value}}' "
+                        f"or 'action: <name>'")
         risk = None
         if act_raw.get("risk") is not None:
             try:

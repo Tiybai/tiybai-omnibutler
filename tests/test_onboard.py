@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from omnibutler.core.errors import PlannedDriverError
 from omnibutler.core.models import Capability, Device, Property
 from omnibutler.drivers.base import Driver

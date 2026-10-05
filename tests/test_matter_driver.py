@@ -173,7 +173,7 @@ def fake_server(monkeypatch):
     module = types.ModuleType("websockets")
 
     def connect(url):
-        server.urls = getattr(server, "urls", []) + [url]
+        server.urls = [*getattr(server, "urls", []), url]
         return FakeConnection(server)
 
     module.connect = connect

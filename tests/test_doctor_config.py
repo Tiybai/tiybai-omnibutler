@@ -360,7 +360,7 @@ def test_format_report_shape():
     assert "1 ok, 1 warning(s), 1 failure(s)" in report
 
 
-# -- setup guides ------------------------------------------------------------------------------------
+# -- setup guides ------------------------------------------------------------------
 
 
 def test_guides_cover_the_key_steps_without_real_keys():

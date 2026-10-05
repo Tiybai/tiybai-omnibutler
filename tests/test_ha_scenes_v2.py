@@ -22,7 +22,6 @@ from omnibutler.drivers.homeassistant import (
 from omnibutler.scenes.engine import SceneEngine
 from omnibutler.scenes.loader import SceneValidationError, parse_scene
 
-
 # -- HA fakes -----------------------------------------------------------------
 
 class _FakeResponse:

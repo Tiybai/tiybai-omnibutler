@@ -12,6 +12,7 @@ online/offline availability topics.
 import json
 import sys
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -413,7 +414,7 @@ def test_no_broker_url_and_no_client_is_a_config_error(monkeypatch):
 # -- paho adapter ---------------------------------------------------------------
 
 class FakePahoClient:
-    instances: list = []
+    instances: ClassVar[list] = []
 
     def __init__(self, *args, **kwargs):
         self.on_message = None

@@ -16,7 +16,7 @@ from typing import Any
 from .errors import PropertyValidationError
 
 
-class RiskLevel(str, enum.Enum):
+class RiskLevel(str, enum.Enum):  # noqa: UP042 - StrEnum changes str(member) output; mixin kept deliberately
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -26,11 +26,11 @@ class RiskLevel(str, enum.Enum):
         return {"low": 0, "medium": 1, "high": 2}[self.value]
 
     @classmethod
-    def max_of(cls, *levels: "RiskLevel") -> "RiskLevel":
+    def max_of(cls, *levels: RiskLevel) -> RiskLevel:
         return max(levels, key=lambda level: level.rank) if levels else cls.LOW
 
     @classmethod
-    def parse(cls, value: Any) -> "RiskLevel":
+    def parse(cls, value: Any) -> RiskLevel:
         if isinstance(value, cls):
             return value
         try:
@@ -41,7 +41,7 @@ class RiskLevel(str, enum.Enum):
             ) from None
 
 
-class Capability(str, enum.Enum):
+class Capability(str, enum.Enum):  # noqa: UP042 - StrEnum changes str(member) output; mixin kept deliberately
     """Canonical property names understood across all drivers."""
 
     ONOFF = "onoff"

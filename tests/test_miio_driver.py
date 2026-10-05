@@ -6,6 +6,7 @@ derivation, AES-128-CBC, header checksum) without importing any of the
 driver's codec helpers, so a driver bug cannot cancel out against itself.
 """
 
+import contextlib
 import hashlib
 import json
 import socket
@@ -78,7 +79,7 @@ class FakeMiioDevice(threading.Thread):
         while self._running:
             try:
                 data, addr = self.sock.recvfrom(4096)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break
@@ -112,10 +113,8 @@ class FakeMiioDevice(threading.Thread):
         reply = self._handle(data)
         if reply is None:
             return
-        try:
+        with contextlib.suppress(OSError):
             self._peer_socket(addr).send(reply)
-        except OSError:
-            pass
 
     def stop(self) -> None:
         self._running = False

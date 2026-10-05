@@ -28,9 +28,10 @@ import importlib.util
 import json
 import os
 import socket
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import urlparse
 
 from omnibutler import config as config_module
@@ -45,6 +46,7 @@ from omnibutler.drivers.homeassistant import (
 )
 from omnibutler.drivers.miio import MIIO_PORT, MiioDeviceConfig, _Session
 from omnibutler.drivers.tuya import TuyaDriver
+from omnibutler.notify_webhook import resolve_webhook_url
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 _STATUSES = (OK, WARN, FAIL)
@@ -511,6 +513,32 @@ def _check_gateway_token(environ: Mapping[str, str]) -> CheckResult:
     )
 
 
+def _check_notify_webhook(config: Mapping[str, Any],
+                          environ: Mapping[str, str]) -> CheckResult:
+    """Approval webhook: is a notification URL configured?
+
+    Presence only, like the gateway-token check - the URL is never
+    shown (webhook URLs commonly embed a topic or key that acts as a
+    credential). An optional extra, so "not configured" is a WARN with
+    an explanation, not a failure.
+    """
+    name = "notify-webhook"
+    if resolve_webhook_url(config, environ=environ) is not None:
+        return CheckResult(
+            name, OK,
+            "an approval webhook is configured (its URL is never "
+            "shown) - the daemon POSTs one notification there when a "
+            "high-risk action joins the confirmation queue",
+        )
+    return CheckResult(
+        name, WARN,
+        "no approval webhook is configured - only needed if you want "
+        "a phone push when a high-risk action waits for approval. "
+        "Set OMNIBUTLER_NOTIFY_WEBHOOK_URL or notify.webhook_url in "
+        "the config file (ntfy, Bark and similar services work)",
+    )
+
+
 def _check_cloud_fallbacks(config: Mapping[str, Any],
                            environ: Mapping[str, str]) -> CheckResult:
     """Vendor-cloud fallback drivers: are credentials present?
@@ -704,6 +732,7 @@ def check_all(
     results.append(_check_matter(config, environ, timeout))
     results.append(_check_zigbee2mqtt(config, environ, timeout))
     results.append(_check_gateway_token(environ))
+    results.append(_check_notify_webhook(config, environ))
     results.append(_check_cloud_fallbacks(config, environ))
     results.append(_check_state_dir(runtime))
     results.append(_check_scenes(scenes_dir))

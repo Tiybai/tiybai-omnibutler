@@ -77,7 +77,8 @@ import json
 import logging
 import os
 import urllib.parse
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
 # Reuse points in omnibutler.cloud_keys (login flow, signing,
 # transport, error taxonomy) - imported private helpers on purpose:
@@ -101,6 +102,7 @@ from omnibutler.cloud_keys import (
     HttpResponse,
     _parse_json,
     _send,
+    _urllib_http,
     _xiaomi_authenticate,
     _xiaomi_device_list,
     _xiaomi_login_fields,
@@ -108,7 +110,6 @@ from omnibutler.cloud_keys import (
     _xiaomi_service_token,
     _xiaomi_signature,
     _xiaomi_signed_nonce,
-    _urllib_http,
 )
 from omnibutler.config import get_section, load_config, resolve_secret
 from omnibutler.core.errors import (
@@ -119,6 +120,7 @@ from omnibutler.core.errors import (
 )
 from omnibutler.core.models import Device
 from omnibutler.drivers.base import Driver
+
 # Reuse points in omnibutler.drivers.miio: the per-model MIoT tables
 # and value translators, shared with the local driver so both
 # channels expose identical properties with identical conversions.
@@ -126,8 +128,8 @@ from omnibutler.drivers.miio import (
     _FAMILY_MAPS,
     _FAMILY_PROPERTIES,
     MiioDriver,
-    _MiotRef,
     _kind_from_model,
+    _MiotRef,
 )
 
 logger = logging.getLogger(__name__)
@@ -470,7 +472,10 @@ class XiaomiCloudDriver(Driver):
             brand="Xiaomi",
             model=str(entry.get("model") or ""),
             properties=dict(_FAMILY_PROPERTIES[family]),
-            actions=["turn_on", "turn_off", "toggle"],
+            actions=["turn_on", "turn_off", "toggle"] + [
+                name for name, ref in _FAMILY_MAPS[family].items()
+                if ref.kind == "action"
+            ],
             online=bool(entry.get("isOnline", True)),
         )
         self._dids[device.id] = did
@@ -490,7 +495,10 @@ class XiaomiCloudDriver(Driver):
     def _read_state(self, client: _XiaomiCloudClient,
                     device: Device) -> dict[str, Any]:
         mapping = self._mappings[device.id]
-        refs = [(ref.siid, ref.piid) for ref in mapping.values()]
+        # Action entries (kind "action", piid slot = aiid) are not
+        # readable properties; state reads skip them.
+        refs = [(ref.siid, ref.piid) for ref in mapping.values()
+                if ref.kind != "action"]
         items = client.miot_get(self._dids[device.id], refs)
         by_address = {
             (item.get("siid"), item.get("piid")): item for item in items
@@ -498,6 +506,8 @@ class XiaomiCloudDriver(Driver):
         state: dict[str, Any] = {}
         failures = 0
         for name, ref in mapping.items():
+            if ref.kind == "action":
+                continue
             item = by_address.get((ref.siid, ref.piid))
             if item is None or item.get("code") != 0:
                 failures += 1
@@ -558,6 +568,27 @@ class XiaomiCloudDriver(Driver):
         device.state = self._read_state(client, device)
         return dict(device.state)
 
+    # -- power for action-backed families (vacuum) -------------------------
+    def _power_via_actions(self, client: _XiaomiCloudClient,
+                           device: Device,
+                           mapping: dict[str, _MiotRef],
+                           on: bool) -> dict[str, Any]:
+        """The local miio driver's power translation, over the cloud
+        action endpoint: on starts a sweep; off stops sweeping and
+        sends the vacuum back to its dock to charge."""
+        names = ("start_sweep",) if on else ("stop_sweeping", "start_charge")
+        for name in names:
+            ref = mapping[name]
+            item = client.miot_action(
+                self._dids[device.id], ref.siid, ref.piid, [])
+            if item.get("code") != 0:
+                raise XiaomiCloudError(
+                    KIND_BAD_RESPONSE,
+                    f"Xiaomi cloud device {device.id!r} refused "
+                    f"action {name!r} (result code {item.get('code')}).",
+                )
+        return {"onoff": on}
+
     def set_property(self, device_id: str, property_name: str,
                      value: Any) -> dict[str, Any]:
         client = self._resolve_client()
@@ -566,7 +597,17 @@ class XiaomiCloudDriver(Driver):
         device = self._lookup(device_id)
         mapping = self._mappings[device_id]
         ref = mapping.get(property_name)
+        if ref is not None and ref.kind == "action":
+            raise PropertyValidationError(
+                f"{property_name!r} of device {device_id!r} is a MIoT "
+                "action, not a settable property; run it with call_action"
+            )
         if ref is None:
+            if property_name == "onoff" and "start_sweep" in mapping:
+                # Action-backed power (vacuum), same translation as
+                # the local driver - see _power_via_actions.
+                return self._power_via_actions(
+                    client, device, mapping, bool(value))
             raise PropertyValidationError(
                 f"device {device_id!r} has no miIO-mapped property "
                 f"{property_name!r}; available: {sorted(mapping)}"
@@ -594,10 +635,10 @@ class XiaomiCloudDriver(Driver):
         if action == "toggle":
             current = self.get_state(device_id).get("onoff", False)
             return self.set_property(device_id, "onoff", not current)
-        # MIoT actions: if a model's mapping ever grows an entry with
-        # kind "action" (its piid slot carries the aiid), it runs
-        # through /app/miotspec/action. Today's miio tables define
-        # properties only, so nothing routes here yet.
+        # MIoT actions: a mapping entry with kind "action" (its piid
+        # slot carries the aiid) runs through /app/miotspec/action.
+        # The vacuum family's start_sweep / stop_sweeping /
+        # start_charge entries route here.
         client = self._resolve_client()
         if device_id not in self._devices:
             self.discover()

@@ -62,7 +62,7 @@ class PendingConfirmation:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "PendingConfirmation":
+    def from_dict(cls, data: dict[str, Any]) -> PendingConfirmation:
         return cls(
             id=str(data["id"]),
             device_id=str(data.get("device", data.get("device_id", ""))),

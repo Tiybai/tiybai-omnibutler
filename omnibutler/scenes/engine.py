@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import datetime as _dt
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from omnibutler.core.confirmations import ConfirmationQueue
 from omnibutler.core.events import Event
@@ -166,21 +167,24 @@ class SceneEngine:
             )
         if trigger.type == "schedule":
             if trigger.at:
-                return event.get("time") == trigger.at
-            if trigger.every_minutes:
+                matched = event.get("time") == trigger.at
+            elif trigger.every_minutes:
                 minute = event.get("minute")
-                return isinstance(minute, int) and minute % trigger.every_minutes == 0
-            return False
+                matched = (isinstance(minute, int)
+                           and minute % trigger.every_minutes == 0)
+            else:
+                return False
+            if not matched:
+                return False
+            if trigger.days is not None:
+                return self._event_weekday(event) in trigger.days
+            return True
         if trigger.type == "state_change":
-            if event.get("device") != trigger.device:
-                return False
-            if trigger.property and event.get("property") != trigger.property:
-                return False
-            return True
+            return (event.get("device") == trigger.device
+                    and (not trigger.property
+                         or event.get("property") == trigger.property))
         if trigger.type in ("session_opened", "session_closed"):
-            if trigger.device and event.get("device") != trigger.device:
-                return False
-            return True
+            return not trigger.device or event.get("device") == trigger.device
         return False
 
     # -- conditions ---------------------------------------------------------
@@ -203,6 +207,21 @@ class SceneEngine:
         current = self._value_since.get(key)
         if current is None or current[0] != value:
             self._value_since[key] = (value, time.monotonic())
+
+    def _event_weekday(self, event: Event) -> int:
+        """Weekday (Mon=0 .. Sun=6) of the event, in local time.
+
+        Mirrors :meth:`_now_minutes` precedence: an injected clock that
+        yields a date/datetime wins (tests and replays); otherwise the
+        event's own ``timestamp`` decides. The timestamp is plain epoch
+        seconds - it carries no timezone - so it is read as *local* time,
+        the same local time the daemon used for the event's "HH:MM".
+        """
+        if self.clock is not None:
+            provided = self.clock()
+            if isinstance(provided, _dt.date):
+                return provided.weekday()
+        return _dt.datetime.fromtimestamp(event.timestamp).weekday()
 
     def _now_minutes(self, event: Event | None = None) -> int:
         """Current time of day in minutes: injected clock > event > wall."""
@@ -235,6 +254,9 @@ class SceneEngine:
                         f"(now {_minutes_to_hhmm(now)})"
                     )
                 continue
+            # State conditions always name a device and a property (the
+            # loader enforces it); time_window conditions continued above.
+            assert condition.device is not None and condition.property is not None
             device = self.manager.registry.find(condition.device)
             if device is None:
                 return f"state condition not met: device {condition.device!r} not found"
@@ -261,6 +283,10 @@ class SceneEngine:
         late is acceptable, pretending is not.
         """
         required = condition.for_seconds
+        # The caller only invokes us when for_seconds is set, and state
+        # conditions always name a device and a property (loader-enforced).
+        assert required is not None
+        assert condition.device is not None and condition.property is not None
         entry = self._value_since.get((condition.device, condition.property))
         if entry is None or entry[0] != actual:
             return (

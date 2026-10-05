@@ -39,7 +39,7 @@ class FakeHttp:
         self.calls: list[SimpleNamespace] = []
         self.routes: list[tuple[str, object]] = []
 
-    def add(self, needle: str, response) -> "FakeHttp":
+    def add(self, needle: str, response) -> FakeHttp:
         self.routes.append((needle, response))
         return self
 
@@ -119,9 +119,8 @@ def test_xiaomi_happy_path_returns_tokens():
 
 def test_xiaomi_wrong_password_is_auth_failed_without_leaking(caplog):
     http = _xiaomi_http({"code": 70016, "desc": "pwd error"})
-    with caplog.at_level(logging.DEBUG):
-        with pytest.raises(CloudKeyError) as excinfo:
-            fetch_xiaomi_tokens("user@example.com", PASSWORD, http=http)
+    with caplog.at_level(logging.DEBUG), pytest.raises(CloudKeyError) as excinfo:
+        fetch_xiaomi_tokens("user@example.com", PASSWORD, http=http)
     assert excinfo.value.kind == KIND_AUTH_FAILED
     assert PASSWORD not in str(excinfo.value)
     assert PASSWORD not in caplog.text
