@@ -123,7 +123,10 @@ plain-language help fetching a device key with `tob setup miio` /
 says in plain language what each found device still needs,
 `tob fetch-keys xiaomi|tuya` fetches local keys from the vendor cloud
 once (with your own account, only when no captcha/2FA blocks it), and
-`tob gateway` accepts phone data streams and geofence events.
+`tob gateway` accepts phone data streams and geofence events;
+`tob streams` shows what the phone has sent, `tob discover` lists what
+each driver can see on the network, and `tob state` prints one
+device's full current state.
 
 High-risk devices (the garage door in the demo home) refuse direct tool
 calls by design. Try it: ask the agent to open the garage door, then run a
@@ -144,7 +147,16 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.5 (this release) - the completeness pass: nothing half-wired is
+v0.6 (this release) - the second completeness pass: a Xiaomi cloud
+fallback driver (`--driver xiaomi_cloud`) joins the Tuya one - when
+a Xiaomi device cannot be reached locally (no token, not on this
+network), it can be controlled through the vendor cloud using the
+same login machinery as `tob fetch-keys` and the same MIOT property
+mapping as the local driver. Like `tuya_cloud` it is deliberately
+*not* part of `all`. device-data grows to 14 profiles (Zigbee door
+and motion sensors, a generic Matter plug, a Tuya curtain motor).
+
+v0.5 - the completeness pass: nothing half-wired is
 left. The MCP surface now covers data streams and terminal sessions
 (12 tools); the phone gateway can run inside the daemon
 (`tob run --gateway`, one process, scenes fire exactly once);
@@ -170,10 +182,12 @@ biggest gap** (issues #2 and #4).
 - [x] v0.5 - MCP streams/sessions tools; gateway inside the daemon;
       doctor for the new drivers; config versioning live; Tuya cloud
       fallback driver; setup guides for all drivers
-- [ ] v0.6 - real-hardware verification round (needs owners of real
+- [x] v0.6 - Xiaomi cloud fallback driver (cloud fallbacks now cover
+      both brands with a usable public cloud API); device-data at
+      14 profiles
+- [ ] v0.7 - real-hardware verification round (needs owners of real
       devices - see issues #2 and #4)
-- [ ] Later - PyPI release (needs the maintainer's PyPI account);
-      vendor-cloud fallbacks for more brands where no local path exists
+- [ ] Later - PyPI release (needs the maintainer's PyPI account)
 
 ## Contributing a device
 

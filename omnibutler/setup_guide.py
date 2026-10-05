@@ -256,12 +256,67 @@ _TUYA_CLOUD_GUIDE = """\
   返回异常），不会假装控制成功。
 """
 
+_XIAOMI_CLOUD_GUIDE = """\
+小米云兜底控制（--driver xiaomi_cloud）——本地走不通时才用
+
+先说清这条路是干什么的。桥控制小米设备的正道是本地直连
+（--driver miio）：靠每台设备自己的 token，在家里局域网里
+控制，断网照样跑、不经过小米的服务器（拿 token 的办法看
+`tob setup miio`）。但有些情况本地这条路走不通：某台设备
+的 token 拿不到、设备在桥够不着的网络里、或者本地协议对
+不上。这时还有一条兜底路：桥拿你的小米账号登录小米云，
+经云端控制这些设备。丑话说前面：这条路依赖小米云和外网，
+断网就用不了，速度和可靠性都不如本地直连，而且小米的服务
+器会看到每条指令。所以它只当兜底：桥的 all 组合里故意不
+包含它，必须你自己显式选 --driver xiaomi_cloud 才会走云。
+
+什么时候值得用：
+- 某台小米设备折腾半天还是拿不到 token，先用云兜底顶上，
+  别让一台设备卡住全屋；
+- 设备不在家里这个局域网（比如另一处住所），本地够不着。
+
+要填什么（小米账号 + 密码，二选一）：
+- 环境变量：XIAOMI_CLOUD_USERNAME（你的小米账号：邮箱、
+  手机号或小米 ID）、XIAOMI_CLOUD_PASSWORD（账号密码）；
+  账号不是中国区的再加 XIAOMI_CLOUD_COUNTRY（如 de、us，
+  默认 cn）。
+- 或者写进本机 config.json 的 xiaomi_cloud 一节：
+  username、password、country 三个字段；password 用 env:
+  引用（如 "password": "env:XIAOMI_CLOUD_PASSWORD"），
+  配置文件里不落明文密码。
+
+关于密码，放心在这几点上：
+- 密码只在跑桥的这台机器上、登录那一刻在内存里用一次
+  （按小米自己的登录方式算个哈希发出去），不写进日志、
+  不出现在报错里、更不会上传到小米以外的任何地方；
+- 桥没有服务器，账号密码不出这台机器（除了登录小米云
+  本身）；
+- 介意密码长期放环境变量，就只在启动桥时临时给，用完清掉。
+
+会明确停下来的情况：
+- 小米在登录时弹验证码或要求两步验证，桥会直接停下，报
+  needs_human_verification——它不会、也不应该替你过验证。
+  遇到这种情况，先在浏览器或米家 App 里正常登录一次把
+  验证过掉，再回来重试；实在过不去，就回本地路线
+  （tob setup miio）一台台拿 token。
+- 云端登录态过期时桥会自动重新登录一次再重试；账号密码
+  真错了，它会直说凭据不对，不会假装控制成功。
+
+配好后：tob --driver xiaomi_cloud devices 就能列出账号
+名下、桥有控制映射的设备（空调、空气净化器这些已有映射
+的品类）。没有映射的型号会被跳过——云端能看见它，也不
+等于桥会控制它，这一点桥不会糊弄你。
+"""
+
 _GUIDES = {
     "miio": _MIIO_GUIDE,
     "xiaomi": _MIIO_GUIDE,
     "tuya": _TUYA_GUIDE,
     "tuya_cloud": _TUYA_CLOUD_GUIDE,
     "tuya-cloud": _TUYA_CLOUD_GUIDE,
+    "xiaomi_cloud": _XIAOMI_CLOUD_GUIDE,
+    "xiaomi-cloud": _XIAOMI_CLOUD_GUIDE,
+    "mi-cloud": _XIAOMI_CLOUD_GUIDE,
     "ha": _HA_GUIDE,
     "homeassistant": _HA_GUIDE,
     "home-assistant": _HA_GUIDE,
@@ -277,7 +332,8 @@ def guide_text(brand: str) -> str:
     """Return the plain-language key-fetching guide for one brand.
 
     ``brand`` is one of ``"miio"`` (alias ``"xiaomi"``), ``"tuya"``,
-    ``"tuya_cloud"`` (alias ``"tuya-cloud"``), ``"ha"`` (aliases
+    ``"tuya_cloud"`` (alias ``"tuya-cloud"``), ``"xiaomi_cloud"``
+    (aliases ``"xiaomi-cloud"`` / ``"mi-cloud"``), ``"ha"`` (aliases
     ``"homeassistant"`` / ``"home-assistant"``), ``"matter"``,
     ``"zigbee2mqtt"`` (aliases ``"zigbee"`` / ``"z2m"``) or
     ``"gateway"``, case-insensitive. The text explains every step the
@@ -289,7 +345,7 @@ def guide_text(brand: str) -> str:
     except (KeyError, AttributeError):
         raise ValueError(
             f"no setup guide for {brand!r}; available: miio, tuya, "
-            f"tuya_cloud, ha, matter, zigbee2mqtt, gateway"
+            f"tuya_cloud, xiaomi_cloud, ha, matter, zigbee2mqtt, gateway"
         ) from None
 
 

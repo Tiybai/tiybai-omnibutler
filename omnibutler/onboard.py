@@ -72,7 +72,7 @@ _KEY_NEEDS: dict[str, str] = {
 #: Drivers whose sightings never need a per-device key fetched by hand.
 _OPEN_DRIVERS = frozenset({"broadlink", "homeassistant", "ha", "matter",
                            "mock", "terminal_mock", "zigbee2mqtt",
-                           "tuya_cloud"})
+                           "tuya_cloud", "xiaomi_cloud"})
 
 #: Plain-language explanation of each key, reused by draft notes/report.
 _KEY_EXPLAINED: dict[str, str] = {

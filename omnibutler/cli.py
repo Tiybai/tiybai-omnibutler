@@ -549,7 +549,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tob", description="Tiybai OmniButler CLI")
     parser.add_argument("--version", action="version", version=f"tob {__version__}")
     parser.add_argument("--driver", choices=["mock", "homeassistant", "miio",
-                                             "tuya", "tuya_cloud", "broadlink",
+                                             "tuya", "tuya_cloud", "xiaomi_cloud",
+                                             "broadlink",
                                              "midea", "matter", "zigbee2mqtt",
                                              "terminal_mock", "all"],
                         default=None,

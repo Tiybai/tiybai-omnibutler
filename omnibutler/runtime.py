@@ -25,6 +25,7 @@ from omnibutler.drivers.mock import MockDriver
 from omnibutler.drivers.terminal_mock import TerminalMockDriver
 from omnibutler.drivers.tuya import TuyaDriver
 from omnibutler.drivers.tuya_cloud import TuyaCloudDriver
+from omnibutler.drivers.xiaomi_cloud import XiaomiCloudDriver
 from omnibutler.drivers.zigbee2mqtt import Zigbee2MqttDriver
 from omnibutler.scenes.engine import SceneEngine
 from omnibutler.scenes.loader import load_scenes_dir
@@ -47,7 +48,8 @@ class Runtime:
 
 
 DRIVER_NAMES = ("mock", "homeassistant", "miio", "tuya", "broadlink", "midea",
-                "matter", "zigbee2mqtt", "terminal_mock", "tuya_cloud")
+                "matter", "zigbee2mqtt", "terminal_mock", "tuya_cloud",
+                "xiaomi_cloud")
 
 
 def _build_drivers(driver: str) -> dict:
@@ -83,17 +85,18 @@ def _build_drivers(driver: str) -> dict:
         "zigbee2mqtt": lambda: Zigbee2MqttDriver(
             devices=entries("zigbee2mqtt", "friendly_name")),
         "terminal_mock": lambda: TerminalMockDriver(),
-        # Cloud fallback: credentials come from its own env/config
-        # section; constructed without arguments on purpose.
+        # Cloud fallbacks: credentials come from their own env/config
+        # sections; constructed without arguments on purpose.
         "tuya_cloud": lambda: TuyaCloudDriver(),
+        "xiaomi_cloud": lambda: XiaomiCloudDriver(),
     }
     if driver == "all":
-        # tuya_cloud is deliberately NOT part of "all": it routes
-        # control through the vendor's cloud, so it must be selected
-        # explicitly - nobody should end up on the cloud channel
-        # without having chosen it.
+        # tuya_cloud and xiaomi_cloud are deliberately NOT part of
+        # "all": they route control through a vendor's cloud, so each
+        # must be selected explicitly - nobody should end up on a
+        # cloud channel without having chosen it.
         return {name: build() for name, build in builders.items()
-                if name != "tuya_cloud"}
+                if name not in ("tuya_cloud", "xiaomi_cloud")}
     if driver in builders:
         return {driver: builders[driver]()}
     raise ValueError(
