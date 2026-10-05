@@ -84,9 +84,11 @@ def test_mcp_initialize_and_tools_list(mcp_server):
     assert response["result"]["serverInfo"]["name"] == "tiybai-omnibutler"
     tools = _rpc(mcp_server, "tools/list")["result"]["tools"]
     names = {t["name"] for t in tools}
+    # confirm_action is deliberately absent: approving a high-risk action is
+    # a human-only, out-of-band step (`tob confirm <id>` on the host).
     assert names == {"list_devices", "get_device_state", "set_device_property",
                      "call_device_action", "list_scenes", "enable_scene",
-                     "get_pending_confirmations", "confirm_action"}
+                     "get_pending_confirmations"}
 
 
 def _call(mcp_server, name, arguments):
@@ -145,5 +147,5 @@ def test_mcp_stdio_smoke():
         proc.wait(timeout=10)
     assert init["result"]["serverInfo"]["name"] == "tiybai-omnibutler"
     names = {t["name"] for t in listing["result"]["tools"]}
-    assert {"list_devices", "confirm_action"} <= names
-    assert len(names) == 8
+    assert "list_devices" in names and "confirm_action" not in names
+    assert len(names) == 7

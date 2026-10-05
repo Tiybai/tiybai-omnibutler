@@ -10,6 +10,13 @@ Examples:
     tob simulate                fire a geofence 'arrive home' event and show the chain
     tob discover                aggregate driver discovery
     tob mcp                     serve MCP over stdio (for AI agents)
+    tob mcp --http              serve MCP over HTTP (token auth, remote agents)
+    tob run                     run the butler daemon (schedule + state polling)
+    tob doctor                  health-check drivers, credentials and scenes
+    tob setup miio              plain-language guide to getting a device key
+    tob pending                 list high-risk actions waiting for a human (host only)
+    tob confirm cfm-0001        approve a queued high-risk action (host only)
+    tob reject cfm-0001         reject a queued high-risk action (host only)
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -190,20 +198,19 @@ def cmd_simulate(args) -> int:
 
 
 def cmd_discover(args) -> int:
+    from omnibutler.drivers.broadlink import BroadlinkDriver
+    from omnibutler.drivers.midea import MideaDriver
+
     print("mock driver:")
-    mock_devices = MockDriver().discover()
-    _print_devices(mock_devices)
-    print("\nhomeassistant driver:")
-    try:
-        ha_devices = HomeAssistantDriver().discover()
-        _print_devices(ha_devices)
-    except OmniButlerError as exc:
-        print(f"  (not available) {exc}")
-    print("\nplanned drivers (not implemented in v0.1):")
-    for driver in (MiioDriver(), TuyaDriver()):
-        found = driver.discover()
-        print(f"  {driver.name}: planned - returns {len(found)} devices for now; "
-              f"see omnibutler/drivers/{driver.name if driver.name != 'miio' else 'miio'}.py")
+    _print_devices(MockDriver().discover())
+    for cls in (HomeAssistantDriver, MiioDriver, TuyaDriver,
+                BroadlinkDriver, MideaDriver):
+        driver = cls()
+        print(f"\n{driver.name} driver:")
+        try:
+            _print_devices(driver.discover())
+        except Exception as exc:  # not configured / dependency missing / offline
+            print(f"  (not available) {exc}")
     return 0
 
 
@@ -211,16 +218,163 @@ def cmd_mcp(args) -> int:
     runtime = build_runtime(driver=args.driver, audit_path=args.audit)
     from omnibutler.mcp_server.server import create_server, run_stdio
 
-    run_stdio(create_server(runtime.manager, engine=runtime.engine,
-                            confirmations=runtime.confirmations))
+    server = create_server(runtime.manager, engine=runtime.engine,
+                           confirmations=runtime.confirmations)
+    if args.http:
+        from omnibutler.mcp_server.http_transport import serve
+
+        print(f"serving MCP over HTTP on {args.host}:{args.port} "
+              f"(token from $OMNIBUTLER_HTTP_TOKEN required)")
+        serve(server, host=args.host, port=args.port)
+    else:
+        run_stdio(server)
+    return 0
+
+
+def cmd_run(args) -> int:
+    runtime = build_runtime(driver=args.driver, audit_path=args.audit)
+    from omnibutler.daemon import run_daemon
+
+    print(f"omnibutler running with driver={runtime.driver_name} "
+          f"(poll every {args.poll}s; Ctrl-C to stop)")
+    stats = run_daemon(runtime, poll_interval=args.poll)
+    print(f"stopped: {json.dumps(stats, ensure_ascii=False, default=str)}")
+    return 0
+
+
+def cmd_doctor(args) -> int:
+    runtime = build_runtime(driver=args.driver, audit_path=args.audit)
+    from omnibutler.doctor import check_all, format_report
+
+    results = check_all(runtime)
+    print(format_report(results))
+    return 1 if any(r.status == "fail" for r in results) else 0
+
+
+def cmd_setup(args) -> int:
+    from omnibutler.setup_guide import guide_text
+
+    print(guide_text(args.brand))
+    return 0
+
+
+def cmd_setup_secret(args) -> int:
+    import getpass
+    import os
+
+    from omnibutler.setup_guide import store_secret
+
+    config_path = os.environ.get(
+        "OMNIBUTLER_CONFIG", str(Path.home() / ".omnibutler" / "config.json"))
+    value = getpass.getpass(f"value for {args.key_path} (hidden): ")
+    if not value:
+        print("nothing entered; aborted", file=sys.stderr)
+        return 1
+    store_secret(config_path, args.key_path, value)
+    print(f"stored {args.key_path} in {config_path} (permissions 0600, "
+          f"value not shown)")
+    return 0
+
+
+# -- human-only confirmation commands ----------------------------------------
+# Approving or rejecting a high-risk action is deliberately *not* available
+# through the MCP server (agents can only read the queue). These commands run
+# in a terminal on the host and share the persisted queue with every other
+# process via OMNIBUTLER_STATE_DIR (default ~/.omnibutler).
+
+def _format_wait(created_at: float) -> str:
+    seconds = max(0, int(time.time() - created_at))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h{minutes:02d}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d{hours}h"
+
+
+def _describe_item(item) -> str:
+    if item.kind == "set_property":
+        what = f"set {item.device_id}.{item.name} = {item.value!r}"
+    else:
+        what = f"call {item.device_id}.{item.name}({item.params})"
+    origin = item.scene or item.requested_by or "-"
+    return f"{item.id}: {what} risk={item.risk} from={origin}"
+
+
+def cmd_pending(args) -> int:
+    runtime = build_runtime(driver=args.driver, audit_path=args.audit)
+    pending = runtime.confirmations.pending()
+    if not pending:
+        print("(no pending confirmations)")
+        return 0
+    print(f"{len(pending)} pending confirmation(s):")
+    for item in pending:
+        print(f"  {_describe_item(item)} waiting={_format_wait(item.created_at)}")
+    print("approve with: tob confirm <id>   reject with: tob reject <id>")
+    return 0
+
+
+def cmd_confirm(args) -> int:
+    runtime = build_runtime(driver=args.driver, audit_path=args.audit)
+    item = runtime.confirmations.get(args.confirmation_id)
+    if item is None or item.status != "pending":
+        print(f"error: no pending confirmation {args.confirmation_id!r}",
+              file=sys.stderr)
+        return 1
+    result = runtime.engine.confirm(item.id, agent="cli:human")
+    if result is None:
+        print(f"error: confirmation {item.id} could not be executed",
+              file=sys.stderr)
+        return 1
+    runtime.manager.audit.record(
+        agent="cli:human", device_id=item.device_id,
+        action="confirmation:approved",
+        params={"confirmation_id": item.id, "kind": item.kind,
+                "name": item.name, "value": item.value,
+                "requested_by": item.requested_by, "scene": item.scene},
+        result={"confirmation_id": item.id, "decision": "approved"},
+    )
+    print(f"confirmed and executed: {_describe_item(item)}")
+    print(f"result: {json.dumps(result, ensure_ascii=False, default=str)}")
+    state = runtime.manager.get_state(item.device_id)
+    print(f"state: {json.dumps(state, ensure_ascii=False)}")
+    return 0
+
+
+def cmd_reject(args) -> int:
+    runtime = build_runtime(driver=args.driver, audit_path=args.audit)
+    item = runtime.confirmations.get(args.confirmation_id)
+    if item is None or item.status != "pending":
+        print(f"error: no pending confirmation {args.confirmation_id!r}",
+              file=sys.stderr)
+        return 1
+    if not runtime.engine.reject(item.id):
+        print(f"error: confirmation {item.id} could not be rejected",
+              file=sys.stderr)
+        return 1
+    runtime.manager.audit.record(
+        agent="cli:human", device_id=item.device_id,
+        action="confirmation:rejected",
+        params={"confirmation_id": item.id, "kind": item.kind,
+                "name": item.name, "value": item.value,
+                "requested_by": item.requested_by, "scene": item.scene},
+        result={"confirmation_id": item.id, "decision": "rejected"},
+    )
+    print(f"rejected: {_describe_item(item)} (nothing was executed)")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tob", description="Tiybai OmniButler CLI")
     parser.add_argument("--version", action="version", version=f"tob {__version__}")
-    parser.add_argument("--driver", choices=["mock", "homeassistant"], default=None,
-                        help="device driver (default: mock, or $TOB_DRIVER)")
+    parser.add_argument("--driver", choices=["mock", "homeassistant", "miio",
+                                             "tuya", "broadlink", "midea", "all"],
+                        default=None,
+                        help="device driver set (default: mock, or $TOB_DRIVER)")
     parser.add_argument("--audit", default=None,
                         help="audit log path (default: $TOB_AUDIT_PATH or ~/.omnibutler/audit.jsonl)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -254,8 +408,39 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("discover", help="aggregate discovery across drivers")
     p.set_defaults(func=cmd_discover)
 
-    p = sub.add_parser("mcp", help="run the MCP server on stdio (for AI agents)")
+    p = sub.add_parser("mcp", help="run the MCP server (for AI agents)")
+    p.add_argument("--http", action="store_true",
+                   help="serve over HTTP instead of stdio (needs $OMNIBUTLER_HTTP_TOKEN)")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
     p.set_defaults(func=cmd_mcp)
+
+    p = sub.add_parser("run", help="run the butler daemon (schedule + state polling)")
+    p.add_argument("--poll", type=int, default=30,
+                   help="device state poll interval in seconds (default 30)")
+    p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("doctor", help="health-check drivers, credentials and scenes")
+    p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("setup", help="plain-language guide to getting a device key")
+    p.add_argument("brand", choices=["miio", "xiaomi", "tuya", "ha", "homeassistant"])
+    p.set_defaults(func=cmd_setup)
+
+    p = sub.add_parser("setup-secret", help="store a device key in the local config (hidden input)")
+    p.add_argument("key_path", help="dotted path, e.g. miio.devices.0.token")
+    p.set_defaults(func=cmd_setup_secret)
+
+    p = sub.add_parser("pending", help="list high-risk actions awaiting a human (host only)")
+    p.set_defaults(func=cmd_pending)
+
+    p = sub.add_parser("confirm", help="approve and execute a queued high-risk action (host only)")
+    p.add_argument("confirmation_id")
+    p.set_defaults(func=cmd_confirm)
+
+    p = sub.add_parser("reject", help="reject a queued high-risk action (host only)")
+    p.add_argument("confirmation_id")
+    p.set_defaults(func=cmd_reject)
     return parser
 
 

@@ -5,9 +5,12 @@ standard library only: initialize, ping, tools/list and tools/call. One JSON
 message per line on stdin/stdout, as MCP stdio transports expect.
 
 Safety note: set_device_property / call_device_action refuse devices whose
-risk is *high* unless a human first parks them through the confirmation flow
-(confirm_action works on queued items, e.g. from scenes). Agents get the
-guardrail, not a bypass.
+risk is *high*. Such operations can only be parked in the confirmation
+queue (e.g. by a scene), and confirming them is a **human-only, out-of-band
+action**: a person runs ``tob confirm <id>`` in a terminal on the host.
+This server exposes the queue read-only (get_pending_confirmations) and
+refuses confirm_action outright, so an agent can never approve its own
+high-risk requests.
 """
 
 from __future__ import annotations
@@ -90,20 +93,8 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "get_pending_confirmations",
-        "description": "List high-risk actions waiting for human confirmation.",
+        "description": "List high-risk actions waiting for human confirmation (read-only: only a human on the host can approve them, via `tob confirm <id>`).",
         "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "confirm_action",
-        "description": "Confirm (execute) or reject a pending high-risk action by its confirmation id. Confirming is a human decision; agents should surface the pending item to the user instead of confirming on their own.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "confirmation_id": {"type": "string"},
-                "approve": {"type": "boolean", "default": True},
-            },
-            "required": ["confirmation_id"],
-        },
     },
 ]
 
@@ -228,16 +219,14 @@ class McpServer:
         if name == "get_pending_confirmations":
             return _tool_result([i.to_dict() for i in self.confirmations.pending()])
         if name == "confirm_action":
-            confirmation_id = self._required(args, "confirmation_id")
-            if args.get("approve", True):
-                result = self.engine.confirm(confirmation_id, agent="mcp-human")
-                if result is None:
-                    raise OmniButlerError(
-                        f"no pending confirmation {confirmation_id!r}")
-                return _tool_result({"confirmed": confirmation_id, "result": result})
-            if not self.engine.reject(confirmation_id):
-                raise OmniButlerError(f"no pending confirmation {confirmation_id!r}")
-            return _tool_result({"rejected": confirmation_id})
+            # Human-only, out-of-band: agents must never approve (or reject)
+            # high-risk actions. The host terminal command `tob confirm <id>`
+            # / `tob reject <id>` is the only approval channel.
+            return _tool_result(
+                {"error": "confirmation is a human-only action: "
+                          "run `tob confirm <id>` on the host"},
+                is_error=True,
+            )
         raise OmniButlerError(f"unknown tool {name!r}")
 
     @staticmethod

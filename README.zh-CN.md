@@ -19,8 +19,9 @@ English version: [README.md](README.md)
 - **统一能力模型** — 每个驱动把自家模型翻译成同一套词：`onoff`（开关）、
   `target_temperature`（目标温度）、`pm25`、`position`（窗帘/门位置）等，
   场景和 AI 不需要懂任何厂商。
-- **统一 Agent 接口** — 一个零依赖的 MCP Server（stdio，JSON-RPC，2024-11-05
-  规范），8 个工具，任何 MCP 客户端都能接。
+- **统一 Agent 接口** — 一个零依赖的 MCP Server（stdio，外加可选的、带
+  令牌鉴权的 HTTP 传输），7 个工具，任何 MCP 客户端都能接。特意说明：
+  工具里**没有**"批准"这一项——确认只能由人在宿主机终端完成。
 - **场景由本地引擎执行** — 场景是 YAML 规则（触发 + 条件 + 动作），由确定性
   引擎在本地运行，断网照跑、结果可预期。AI 负责听懂你的话、编写和调整
   场景，不进入实时控制回路。
@@ -44,7 +45,7 @@ English version: [README.md](README.md)
 需要 Python 3.11+。
 
 ```bash
-git clone https://github.com/zr9959/tiybai-omnibutler.git
+git clone https://github.com/Tiybai/tiybai-omnibutler.git
 cd tiybai-omnibutler
 pip install -e .
 
@@ -85,7 +86,16 @@ tob mcp        # 在 stdio 上提供 MCP 服务
 
 工具：`list_devices`、`get_device_state`、`set_device_property`、
 `call_device_action`、`list_scenes`、`enable_scene`、
-`get_pending_confirmations`、`confirm_action`。
+`get_pending_confirmations`。就这些——**没有批准用的工具**。批准是
+人在宿主机上的事：`tob pending` 看队列，`tob confirm <id>` 批准执行，
+`tob reject <id>` 拒绝。
+
+不在宿主机上跑的 Agent 用 `tob mcp --http`：同样的工具走 HTTP
+（默认 `127.0.0.1:8765`），必须带 `$OMNIBUTLER_HTTP_TOKEN` 的令牌；
+远程访问请套 Cloudflare Access 或 WireGuard，不要裸奔。
+
+常驻运行用 `tob run`（定时触发 + 设备状态轮询）；接真设备前先跑
+`tob doctor` 体检，取钥匙的方法看 `tob setup miio` / `tob setup tuya`。
 
 高风险设备（演示家里的车库门）按设计拒绝工具直控。可以试一下：让 Agent
 开车库门会被拒绝；再用场景请求开门（`examples/scenes/garage-arrival.yaml`），
@@ -103,15 +113,19 @@ tob mcp        # 在 stdio 上提供 MCP 服务
 
 ## 状态与路线图
 
-v0.2（本版）：小米 miIO 与涂鸦本地驱动已按净室协议规格实现
-（`docs/specs/`），并用进程内假设备跑通发现→握手→读写全链路测试；
-**尚待实机验证**，各型号属性映射可能需要按你的设备微调。device-data
-扩到 10 个型号档案；HA 驱动与场景引擎同步增强（重试、错误分类、
-时间窗与状态条件）。
+v0.3（本版）：安全从"文档承诺"变成"代码强制"——MCP 里没有任何办法批准
+自己排队的动作，批准只能在宿主机终端 `tob confirm <id>`，队列落盘、
+跨进程共享、重启不丢。另外新增：常驻 daemon（`tob run`）、给远程
+Agent 的 HTTP 接入（`tob mcp --http`，必须带令牌）、真验证凭据的
+`tob doctor`、本地配置文件与大白话取钥指南（`tob setup`），以及美的
+（msmart-ng）与 Broadlink（python-broadlink，如实做学码/发码）两个
+驱动。小米/涂鸦/美的/Broadlink 均用假设备测过，**尚待实机验证**。
 
 - [x] v0.2 — 按净室规格实现第一批真实本地驱动；开放 device-data 贡献
-- [ ] v0.3 — 实机验证轮次；手机网关模式（穿戴 / 健康只读管道）
-- [ ] v0.4 — Matter 控制器；经 MQTT 对接外部 Zigbee2MQTT
+- [x] v0.3 — 确认带外化强制执行；daemon；MCP over HTTP；doctor 与
+      setup 指南；美的与 Broadlink 驱动
+- [ ] v0.4 — 实机验证轮次；手机网关模式（穿戴 / 健康只读管道）
+- [ ] v0.5 — Matter 控制器；经 MQTT 对接外部 Zigbee2MQTT
 - [ ] 之后 — 开放智能眼镜的终端模式；厂商云兜底通道
 
 ## 贡献设备

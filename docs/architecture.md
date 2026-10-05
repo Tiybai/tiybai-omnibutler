@@ -57,9 +57,12 @@ Same event in, same actions out. High-risk actions are diverted to the
 confirmation queue instead of executing.
 
 ### northbound (MCP)
-A dependency-free MCP server (JSON-RPC over stdio, spec 2024-11-05) exposing
-eight tools: device listing/state, property writes, actions, scene
-management, and the confirmation flow. High-risk devices are refused on the
+A dependency-free MCP server (JSON-RPC over stdio, spec 2024-11-05; an
+optional token-authenticated HTTP transport shares the same handler)
+exposing seven tools: device listing/state, property writes, actions,
+scene management, and a read-only view of the confirmation queue. There
+is deliberately no approve tool - approval happens only from a terminal
+on the host (`tob confirm <id>`). High-risk devices are refused on the
 direct tools - the confirmation queue is the only path.
 
 ## Five access modes

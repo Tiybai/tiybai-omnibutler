@@ -26,8 +26,10 @@ sits in the middle:
 - **One capability model** - drivers translate MiOT-Spec services, Tuya data
   points, Matter clusters and Home Assistant domains into one vocabulary:
   `onoff`, `target_temperature`, `pm25`, `position`, ...
-- **One agent interface** - a dependency-free MCP server (stdio, JSON-RPC,
-  spec 2024-11-05) with eight tools. Any MCP client can use it.
+- **One agent interface** - a dependency-free MCP server (stdio, plus an
+  optional token-authenticated HTTP transport) with seven tools. Any MCP
+  client can use it. Note there is deliberately no "approve" tool:
+  confirmations are human-only, from a terminal on the host.
 - **Scenes that run without the AI** - YAML rules (trigger + conditions +
   actions) executed by a local deterministic engine. The AI authors and
   tunes scenes; it is never in the real-time control loop.
@@ -41,7 +43,8 @@ sits in the middle:
  agents (MCP)  ->  mcp_server  ->  scene engine  ->  core (model/registry/
                                                       events/audit/manager)
                                                       |
-                                    drivers: mock | homeassistant | miio | tuya
+                                    drivers: mock | homeassistant | miio |
+                                             tuya | midea | broadlink
                                                       |
                                     device-data (per-model facts)
 ```
@@ -54,7 +57,7 @@ five device access modes.
 Requires Python 3.11+.
 
 ```bash
-git clone https://github.com/zr9959/tiybai-omnibutler.git
+git clone https://github.com/Tiybai/tiybai-omnibutler.git
 cd tiybai-omnibutler
 pip install -e .
 
@@ -95,7 +98,19 @@ Point any MCP client at that command. Example client configuration:
 
 Tools: `list_devices`, `get_device_state`, `set_device_property`,
 `call_device_action`, `list_scenes`, `enable_scene`,
-`get_pending_confirmations`, `confirm_action`.
+`get_pending_confirmations`. That is the whole list - there is **no**
+tool to approve a queued action. Approving is a human-only step on the
+host: `tob pending`, then `tob confirm <id>` (or `tob reject <id>`).
+
+For agents that do not run on the host, `tob mcp --http` serves the same
+tools over HTTP on `127.0.0.1:8765`, protected by a bearer token from
+`$OMNIBUTLER_HTTP_TOKEN`. For remote access put it behind Cloudflare
+Access or WireGuard; do not expose it raw.
+
+Run it as an always-on butler with `tob run` (schedule triggers and
+device-state polling), check a real setup with `tob doctor`, and get
+plain-language help fetching a device key with `tob setup miio` /
+`tob setup tuya`.
 
 High-risk devices (the garage door in the demo home) refuse direct tool
 calls by design. Try it: ask the agent to open the garage door, then run a
@@ -116,18 +131,24 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.2 (this release) - Xiaomi miIO and Tuya local drivers implemented behind
-clean-room protocol specs (`docs/specs/`), tested end-to-end against
-in-process fake devices; **not yet verified on real hardware** - per-model
-property maps may need adjustment for your unit. device-data grew to 10
-model profiles. HA driver and scene engine hardened (retries, error
-classes, time-window and state conditions).
+v0.3 (this release) - the safety story is now enforced, not just
+documented: the MCP server has no way to approve its own queued actions
+(approval is a host-terminal-only step, and the queue is persisted on
+disk across processes). Also new: an always-on daemon (`tob run`), an
+HTTP transport for remote agents (`tob mcp --http`, token required),
+`tob doctor` health checks that actually verify credentials, a
+local config file + plain-language key-fetching guides (`tob setup`),
+and Midea (msmart-ng) and Broadlink (python-broadlink, honest
+learn/send IR-RF) drivers. Xiaomi/Tuya/Midea/Broadlink drivers are
+tested against fake devices; **not yet verified on real hardware**.
 
 - [x] v0.2 - first real local drivers behind clean-room specs; device-data
       contributions open
-- [ ] v0.3 - real-hardware verification round; phone-gateway mode
+- [x] v0.3 - human-only confirmations enforced; daemon; MCP over HTTP;
+      doctor + setup guides; Midea and Broadlink drivers
+- [ ] v0.4 - real-hardware verification round; phone-gateway mode
       (wearables / health read-only pipelines)
-- [ ] v0.4 - Matter controller, Zigbee via external Zigbee2MQTT over MQTT
+- [ ] v0.5 - Matter controller, Zigbee via external Zigbee2MQTT over MQTT
 - [ ] Later - terminal mode for open smart glasses; vendor-cloud fallbacks
 
 ## Contributing a device

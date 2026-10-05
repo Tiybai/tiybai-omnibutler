@@ -11,6 +11,13 @@ from omnibutler.scenes.loader import load_scenes_dir
 SCENES_DIR = Path(__file__).resolve().parent.parent / "examples" / "scenes"
 
 
+@pytest.fixture(autouse=True)
+def _isolated_state_dir(tmp_path, monkeypatch):
+    """Keep the persisted confirmation queue out of the real ~/.omnibutler
+    and give every test a fresh queue file."""
+    monkeypatch.setenv("OMNIBUTLER_STATE_DIR", str(tmp_path / "omnibutler-state"))
+
+
 @pytest.fixture()
 def manager(tmp_path):
     audit = AuditLog(path=tmp_path / "audit.jsonl")
