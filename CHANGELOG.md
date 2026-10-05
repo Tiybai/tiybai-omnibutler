@@ -8,6 +8,17 @@ For the full release notes, see
 Every driver below is tested against fake devices unless noted otherwise -
 real-hardware verification is still the project's open gap.
 
+## [0.10.2] - 2026-10-05
+
+### Fixed
+- Windows CI: the POSIX-probe test forced the `os.kill(pid, 0)`
+  path on a Windows host (via a platform monkeypatch) with real
+  pids. There, kill(0) can broadcast a console Ctrl+C - it
+  interrupted the test runner itself mid-suite (546 tests in).
+  The test is now skipped on Windows hosts; the Win32 probe tests
+  still cover the platform split, and the POSIX probe is still
+  exercised on Linux and macOS.
+
 ## [0.10.1] - 2026-10-05
 
 Patch release: makes the new platform CI green and absorbs an

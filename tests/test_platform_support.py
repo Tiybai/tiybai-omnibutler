@@ -127,6 +127,12 @@ def test_win32_never_uses_posix_kill(monkeypatch):
 
 # -- pid_alive: POSIX branch unchanged -------------------------------------
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="forcing the POSIX kill(0) probe on a Windows host is exactly "
+    "the hazard the Win32 branch exists to avoid (os.kill there can "
+    "broadcast a console Ctrl+C and interrupt the test runner)",
+)
 def test_posix_probe_unchanged(monkeypatch):
     monkeypatch.setattr(sys, "platform", "linux")
     assert pid_alive(os.getpid()) is True

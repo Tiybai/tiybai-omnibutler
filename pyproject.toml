@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tiybai-omnibutler"
-version = "0.10.1"
+version = "0.10.2"
 description = "Tiybai OmniButler - an open smart-device bridge that lets AI agents (Muse, OpenClaw, Hermes) control smart devices via MCP."
 readme = "README.md"
 license = { text = "Apache-2.0" }

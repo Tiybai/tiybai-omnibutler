@@ -153,7 +153,7 @@ Scenes are small YAML files - see `examples/scenes/`:
 
 ## Project status & roadmap
 
-v0.10.1 (this release) - the audit round: four independent audits
+v0.10.2 (this release) - the audit round: four independent audits
 (cross-platform, security and concurrency, data layer and
 performance, docs and UI alignment) went over the whole codebase,
 and every finding was fixed or consciously accepted. The
@@ -178,8 +178,12 @@ POSIX-only test assumptions, and a gitleaks allowlist that only
 worked in local scans) plus an upstream breakage: python-broadlink
 1.0 now requires Python 3.13 and its old releases are gone from
 PyPI, so the Broadlink extra skips itself on older Pythons instead
-of failing the whole install. Real-hardware verification moves to
-v0.11 - it still needs owners of real devices (issues #2 and #4).
+of failing the whole install. The .2 patch skips the POSIX-probe
+test on Windows hosts: forcing the kill(0) path there can broadcast
+a console Ctrl+C and interrupt the test runner itself - the very
+hazard the Win32 probe branch exists to avoid. Real-hardware
+verification moves to v0.11 - it still needs owners of real
+devices (issues #2 and #4).
 
 v0.9 - the final sweep: scenes gain delayed actions
 (`- delay: 300` - a light that turns itself off, a vacuum that starts
