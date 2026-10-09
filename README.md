@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](#roadmap)
+[![M8ven Score](https://m8ven.ai/badge/mcp/tiybai-tiybai-omnibutler-11zyva?v=cd7d5cd773fae12ebb2c992d1ea373ca)](https://m8ven.ai/mcp/tiybai-tiybai-omnibutler-11zyva?s=readme)
 
 **An open smart-device bridge that lets AI agents - Muse, OpenClaw,
 Hermes, any MCP client - control the smart devices in your life, and run

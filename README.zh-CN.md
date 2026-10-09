@@ -2,6 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+[![M8ven Score](https://m8ven.ai/badge/mcp/tiybai-tiybai-omnibutler-11zyva?v=cd7d5cd773fae12ebb2c992d1ea373ca)](https://m8ven.ai/mcp/tiybai-tiybai-omnibutler-11zyva?s=readme)
 
 **一个开源智能设备桥：让 Muse、OpenClaw、Hermes 等 AI Agent 通过 MCP 统一控制
 你生活中的智能设备，并用本地确定性场景引擎替你安排贴近生活的自动化。**
